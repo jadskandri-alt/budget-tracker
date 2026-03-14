@@ -27,4 +27,10 @@ contextBridge.exposeInMainWorld('api', {
   importCSV:     ()     => ipcRenderer.invoke('import:csv'),
   importPDF:     ()     => ipcRenderer.invoke('import:pdf'),
   importConfirm: (txs)  => ipcRenderer.invoke('import:confirm', txs),
+
+  // Paramètres & Telegram
+  settingsGet:        ()      => ipcRenderer.invoke('settings:get'),
+  telegramConnect:    (token) => ipcRenderer.invoke('telegram:connect', token),
+  telegramDisconnect: ()      => ipcRenderer.invoke('telegram:disconnect'),
+  onTelegramNewTx:    (cb)    => ipcRenderer.on('telegram:new-tx', cb),
 });

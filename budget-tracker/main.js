@@ -1,15 +1,132 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const Database = require('better-sqlite3');
 const pdfParse = require('pdf-parse');
 
 // Dossier de données de l'application
 const userDataPath = app.getPath('userData');
 const dbPath = path.join(userDataPath, 'budget.db');
+const settingsPath = path.join(userDataPath, 'settings.json');
 
 let db;
 let mainWindow;
+
+// ─── Paramètres ────────────────────────────────────────────────────────────────
+
+function loadSettings() {
+  try { return JSON.parse(fs.readFileSync(settingsPath, 'utf8')); }
+  catch { return {}; }
+}
+
+function saveSettings(patch) {
+  fs.writeFileSync(settingsPath, JSON.stringify({ ...loadSettings(), ...patch }, null, 2), 'utf8');
+}
+
+// ─── Bot Telegram ───────────────────────────────────────────────────────────────
+
+let telegramPolling = false;
+let telegramOffset = 0;
+
+function telegramGet(token, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    const q = new URLSearchParams(params).toString();
+    https.get(`https://api.telegram.org/bot${token}/${method}${q ? '?' + q : ''}`, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('JSON')); } });
+    }).on('error', reject);
+  });
+}
+
+function telegramSend(token, chatId, text) {
+  const body = JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' });
+  const req = https.request({
+    hostname: 'api.telegram.org', path: `/bot${token}/sendMessage`, method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  });
+  req.on('error', () => {});
+  req.write(body); req.end();
+}
+
+function parseTelegramMessage(text, categories) {
+  const m = text.match(/(\d+[.,]\d{1,2}|\d+)/);
+  if (!m) return null;
+  const amount = parseFloat(m[1].replace(',', '.'));
+  if (!amount || amount <= 0) return null;
+
+  const desc = text.slice(0, m.index).trim();
+  const after = text.slice(m.index + m[0].length).trim();
+
+  let type = 'expense';
+  if (after.startsWith('+') || /\b(salaire|revenu|income|remboursement|allocation|pension)\b/i.test(desc)) type = 'income';
+  else if (after.startsWith('-')) type = 'expense';
+
+  const hint = after.replace(/^[+-]/, '').trim();
+  const catNames = categories.map(c => c.name);
+  const found = catNames.find(c => hint && (c.toLowerCase().includes(hint.toLowerCase()) || hint.toLowerCase().includes(c.toLowerCase())));
+  const category = found || 'Autres';
+
+  return { amount, type, description: desc || hint || '', category, date: new Date().toISOString().slice(0, 10) };
+}
+
+async function startTelegramPolling() {
+  const settings = loadSettings();
+  if (!settings.telegramToken) return;
+  telegramPolling = true;
+  telegramOffset = settings.telegramOffset || 0;
+
+  const poll = async () => {
+    if (!telegramPolling) return;
+    try {
+      const res = await telegramGet(settings.telegramToken, 'getUpdates', { offset: telegramOffset, timeout: 25, allowed_updates: 'message' });
+      if (res.ok && res.result.length > 0) {
+        for (const update of res.result) {
+          telegramOffset = update.update_id + 1;
+          const msg = update.message;
+          if (!msg || !msg.text) continue;
+
+          const chatId = msg.chat.id;
+          const token = loadSettings().telegramToken;
+          const savedChatId = loadSettings().telegramChatId;
+          if (savedChatId && chatId.toString() !== savedChatId.toString()) {
+            telegramSend(token, chatId, '❌ Accès non autorisé.'); continue;
+          }
+
+          const text = msg.text.trim();
+          if (text === '/start') {
+            saveSettings({ telegramChatId: chatId });
+            telegramSend(token, chatId, '✅ *Bot connecté !*\n\nEnvoie tes dépenses :\n\n• `café 4.50` → dépense\n• `salaire 3000+` → revenu\n• `loyer 800 Loyer` → avec catégorie\n\n/solde — voir le solde du mois\n/aide — aide');
+          } else if (text === '/solde') {
+            const month = new Date().toISOString().slice(0, 7);
+            const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) as inc, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) as exp FROM transactions WHERE strftime('%Y-%m', date)=?`).get(month);
+            const bal = r.inc - r.exp;
+            telegramSend(token, chatId, `📊 *Ce mois-ci :*\n\n✅ Revenus : ${r.inc.toFixed(2)} €\n💸 Dépenses : ${r.exp.toFixed(2)} €\n💰 Solde : ${bal >= 0 ? '+' : ''}${bal.toFixed(2)} €`);
+          } else if (text === '/aide') {
+            telegramSend(token, chatId, '📖 *Formats acceptés :*\n\n• `café 4.50` → dépense 4.50€\n• `salaire 3000+` → revenu 3000€\n• `loyer 800 Loyer` → avec catégorie\n• `café 4.50 -` → dépense explicite\n\n/solde — solde du mois\n/aide — ce message');
+          } else {
+            const cats = db.prepare('SELECT * FROM categories').all();
+            const tx = parseTelegramMessage(text, cats);
+            if (tx) {
+              db.prepare('INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)').run(tx.amount, tx.type, tx.category, tx.description, tx.date);
+              const e = tx.type === 'income' ? '✅' : '💸';
+              telegramSend(token, chatId, `${e} *${tx.type === 'income' ? 'Revenu' : 'Dépense'} enregistré${tx.type === 'expense' ? 'e' : ''} !*\n\n${tx.description ? `📝 ${tx.description}\n` : ''}💶 ${tx.amount.toFixed(2)} €\n🏷 ${tx.category}`);
+              if (mainWindow) mainWindow.webContents.send('telegram:new-tx');
+            } else {
+              telegramSend(token, chatId, '❓ Format non reconnu.\n\nExemple : `café 4.50` ou `salaire 3000+`\n\n/aide pour plus d\'infos');
+            }
+          }
+        }
+        saveSettings({ telegramOffset });
+      }
+    } catch (_) {}
+    if (telegramPolling) setTimeout(poll, 1000);
+  };
+  poll();
+}
+
+function stopTelegramPolling() { telegramPolling = false; }
 
 // ─── Base de données ───────────────────────────────────────────────────────────
 
@@ -87,6 +204,7 @@ function createWindow() {
 app.whenReady().then(() => {
   initDatabase();
   createWindow();
+  startTelegramPolling();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -482,4 +600,30 @@ ipcMain.handle('import:pdf', async () => {
   }
 
   return { success: true, transactions, total: transactions.length };
+});
+
+// ─── Paramètres & Telegram IPC ────────────────────────────────────────────────
+
+ipcMain.handle('settings:get', () => {
+  const s = loadSettings();
+  return { telegramToken: s.telegramToken || '', telegramChatId: s.telegramChatId || null, active: telegramPolling };
+});
+
+ipcMain.handle('telegram:connect', async (_, token) => {
+  try {
+    const res = await telegramGet(token, 'getMe');
+    if (!res.ok) return { success: false, error: 'Token invalide' };
+    stopTelegramPolling();
+    saveSettings({ telegramToken: token, telegramOffset: 0 });
+    startTelegramPolling();
+    return { success: true, botName: res.result.username };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('telegram:disconnect', () => {
+  stopTelegramPolling();
+  saveSettings({ telegramToken: null, telegramChatId: null, telegramOffset: 0 });
+  return { success: true };
 });

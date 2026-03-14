@@ -64,6 +64,12 @@
         </svg>
         Exporter
       </div>
+      <div class="nav-item" data-page="telegram">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.5 2.5L2.5 9.5l7 2.5m12-9.5l-9 12-2-7m11-5L9.5 12"/>
+        </svg>
+        Telegram
+      </div>
     </nav>
 
     <div class="sidebar-footer">Budget Tracker v1.0</div>
@@ -389,6 +395,62 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Télécharger PDF
           </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Telegram -->
+    <section class="page" id="page-telegram">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Bot Telegram</div>
+          <div class="page-sub">Envoie tes dépenses par message depuis ton téléphone</div>
+        </div>
+        <div id="tg-status-badge" style="display:none;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;background:#d1fae5;color:#065f46;">● Actif</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;">
+
+        <!-- Config -->
+        <div class="card section-gap">
+          <div style="font-size:24px;">🤖</div>
+          <div style="font-weight:700;font-size:15px;">Connexion du bot</div>
+
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:16px;font-size:13px;line-height:1.8;color:var(--muted);">
+            <strong style="color:var(--text);">1.</strong> Ouvre Telegram et cherche <strong>@BotFather</strong><br>
+            <strong style="color:var(--text);">2.</strong> Envoie <code>/newbot</code> et suis les instructions<br>
+            <strong style="color:var(--text);">3.</strong> Copie le token reçu (ex: <code>123456:ABC-DEF...</code>)<br>
+            <strong style="color:var(--text);">4.</strong> Colle-le ici et clique Connecter<br>
+            <strong style="color:var(--text);">5.</strong> Envoie <code>/start</code> à ton bot pour l'activer
+          </div>
+
+          <div class="field">
+            <label>Token du bot</label>
+            <input type="text" id="tg-token" placeholder="123456789:ABCDEFabcdef..." style="font-family:monospace;font-size:12px;">
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" id="btn-tg-connect">Connecter</button>
+            <button class="btn btn-outline" id="btn-tg-disconnect" style="display:none;">Déconnecter</button>
+          </div>
+          <div id="tg-error" style="display:none;color:var(--expense);font-size:13px;"></div>
+        </div>
+
+        <!-- Aide -->
+        <div class="card section-gap">
+          <div style="font-size:24px;">📱</div>
+          <div style="font-weight:700;font-size:15px;">Formats de messages</div>
+          <div style="font-size:13px;line-height:2;color:var(--muted);">
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">café 4.50</code> → dépense de 4,50 €</div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">salaire 3000+</code> → revenu de 3 000 €</div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">loyer 800 Loyer</code> → dépense + catégorie</div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">courses 65.30 -</code> → dépense explicite</div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:12px;font-size:13px;line-height:2;color:var(--muted);">
+            <div><strong>Commandes :</strong></div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">/start</code> → activer le bot</div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">/solde</code> → solde du mois</div>
+            <div><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">/aide</code> → liste des formats</div>
+          </div>
         </div>
       </div>
     </section>

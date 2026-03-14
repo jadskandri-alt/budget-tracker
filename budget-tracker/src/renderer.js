@@ -46,6 +46,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'transactions') loadTransactions();
     if (page === 'budgets')      loadBudgets();
     if (page === 'categories')   loadCategories();
+    if (page === 'telegram')     loadTelegramPage();
   });
 });
 
@@ -402,6 +403,64 @@ document.getElementById('btn-export-pdf').addEventListener('click', async () => 
   const result = await window.api.exportPDF();
   if (result.success) toast('PDF exporté avec succès !');
   else toast('Export annulé', 'error');
+});
+
+// ─── TELEGRAM ────────────────────────────────────────────────────────────────────
+
+async function loadTelegramPage() {
+  const s = await window.api.settingsGet();
+  const tokenInput = document.getElementById('tg-token');
+  const connectBtn = document.getElementById('btn-tg-connect');
+  const disconnectBtn = document.getElementById('btn-tg-disconnect');
+  const badge = document.getElementById('tg-status-badge');
+
+  if (s.active) {
+    tokenInput.value = s.telegramToken;
+    tokenInput.disabled = true;
+    connectBtn.style.display = 'none';
+    disconnectBtn.style.display = '';
+    badge.style.display = '';
+  } else {
+    tokenInput.disabled = false;
+    connectBtn.style.display = '';
+    disconnectBtn.style.display = 'none';
+    badge.style.display = 'none';
+  }
+}
+
+document.getElementById('btn-tg-connect').addEventListener('click', async () => {
+  const token = document.getElementById('tg-token').value.trim();
+  const errEl = document.getElementById('tg-error');
+  if (!token) { errEl.textContent = 'Colle ton token ici.'; errEl.style.display = ''; return; }
+  errEl.style.display = 'none';
+
+  const btn = document.getElementById('btn-tg-connect');
+  btn.textContent = 'Connexion…'; btn.disabled = true;
+
+  const res = await window.api.telegramConnect(token);
+  btn.textContent = 'Connecter'; btn.disabled = false;
+
+  if (res.success) {
+    toast(`Bot @${res.botName} connecté ! Envoie /start à ton bot.`);
+    loadTelegramPage();
+  } else {
+    errEl.textContent = res.error || 'Erreur de connexion';
+    errEl.style.display = '';
+  }
+});
+
+document.getElementById('btn-tg-disconnect').addEventListener('click', async () => {
+  await window.api.telegramDisconnect();
+  toast('Bot déconnecté');
+  loadTelegramPage();
+});
+
+// Rafraîchir le dashboard quand une transaction arrive via Telegram
+window.api.onTelegramNewTx(() => {
+  const activePage = document.querySelector('.nav-item.active')?.dataset.page;
+  if (activePage === 'dashboard') loadDashboard();
+  if (activePage === 'transactions') loadTransactions();
+  toast('Nouvelle transaction reçue via Telegram !');
 });
 
 // ─── Initialisation ──────────────────────────────────────────────────────────────
