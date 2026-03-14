@@ -413,74 +413,71 @@ const INCOME_KEYWORDS  = /\b(salaire|vir recu|virement recu|remboursement|avoir|
 
 ipcMain.handle('import:pdf', async () => {
   const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
-    title: 'Importer un relevé PDF',
+    title: 'Importer des relevés PDF',
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
-    properties: ['openFile'],
+    properties: ['openFile', 'multiSelections'],
   });
   if (canceled || !filePaths.length) return { success: false };
 
-  const buffer = fs.readFileSync(filePaths[0]);
-  const pdfData = await pdfParse(buffer);
-  const text = pdfData.text;
-
   const transactions = [];
-  const lines = text.split('\n');
 
   // Stratégie 1 : format Spuerkeess/BCEE — date valeur DD.MM.YY collée au montant
-  // Ex: "31.01.265.000,00-"  "04.02.26427,00-"  "04.02.2699,00-"
-  // La date valeur (DD.MM.YY = 8 chars) est capturée séparément du montant
-  const amountEndRe  = /(\d{2}\.\d{2}\.\d{2})(\d{1,3}(?:\.\d{3})*,\d{2})([+-])\s*$/;
-  const dateStartRe  = /^(\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2}))(?!\d)/;
-  const anyDateRe    = /\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2})(?!\d)/g;
+  const amountEndRe = /(\d{2}\.\d{2}\.\d{2})(\d{1,3}(?:\.\d{3})*,\d{2})([+-])\s*$/;
+  const dateStartRe = /^(\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2}))(?!\d)/;
+  const anyDateRe   = /\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2})(?!\d)/g;
+  const dateRegex   = /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](\d{4}|\d{2}))\b/g;
 
-  for (const line of lines) {
-    const t = line.trim();
-    if (t.length < 8) continue;
+  for (const filePath of filePaths) {
+    const buffer = fs.readFileSync(filePath);
+    const pdfData = await pdfParse(buffer);
+    const lines = pdfData.text.split('\n');
+    const beforeCount = transactions.length;
 
-    const amountMatch = t.match(amountEndRe);
-    if (!amountMatch) continue;
-
-    // Date comptable en début de ligne, sinon utiliser la date valeur du montant
-    const dateMatch = t.match(dateStartRe);
-    const dateStr = dateMatch ? dateMatch[1] : amountMatch[1];
-    const date = toISODate(dateStr);
-    if (!date) continue;
-
-    // amountMatch[2] = montant, amountMatch[3] = signe +/-
-    // Supprimer les séparateurs de milliers (points), convertir virgule→point
-    const amountStr = amountMatch[2].replace(/\./g, '').replace(',', '.');
-    const amount = parseFloat(amountStr);
-    if (isNaN(amount) || amount === 0) continue;
-
-    const type = amountMatch[3] === '+' ? 'income' : 'expense';
-
-    const desc = t
-      .replace(amountMatch[0], '')
-      .replace(anyDateRe, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80);
-
-    transactions.push({ date, amount, type, category: 'Autres', description: desc });
-  }
-
-  // Stratégie 2 (fallback) : format générique virgule/point décimal, signe avant
-  if (transactions.length === 0) {
-    const dateRegex = /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](\d{4}|\d{2}))\b/g;
     for (const line of lines) {
-      if (line.trim().length < 5) continue;
-      const dateMatches = [...line.matchAll(dateRegex)];
-      if (!dateMatches.length) continue;
-      const date = toISODate(dateMatches[0][1]);
+      const t = line.trim();
+      if (t.length < 8) continue;
+
+      const amountMatch = t.match(amountEndRe);
+      if (!amountMatch) continue;
+
+      // Date comptable en début de ligne, sinon utiliser la date valeur du montant
+      const dateMatch = t.match(dateStartRe);
+      const dateStr = dateMatch ? dateMatch[1] : amountMatch[1];
+      const date = toISODate(dateStr);
       if (!date) continue;
-      let lineForAmount = line;
-      for (const dm of dateMatches) lineForAmount = lineForAmount.replace(dm[0], ' ');
-      const amounts = extractAmounts(lineForAmount);
-      if (!amounts.length) continue;
-      const rawAmount = amounts[amounts.length - 1];
-      const type = rawAmount < 0 ? 'expense' : (INCOME_KEYWORDS.test(line) ? 'income' : 'expense');
-      const desc = lineForAmount.replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
-      transactions.push({ date, amount: Math.abs(rawAmount), type, category: 'Autres', description: desc });
+
+      const amountStr = amountMatch[2].replace(/\./g, '').replace(',', '.');
+      const amount = parseFloat(amountStr);
+      if (isNaN(amount) || amount === 0) continue;
+
+      const type = amountMatch[3] === '+' ? 'income' : 'expense';
+      const desc = t
+        .replace(amountMatch[0], '')
+        .replace(anyDateRe, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+
+      transactions.push({ date, amount, type, category: 'Autres', description: desc });
+    }
+
+    // Stratégie 2 (fallback) : format générique
+    if (transactions.length === beforeCount) {
+      for (const line of lines) {
+        if (line.trim().length < 5) continue;
+        const dateMatches = [...line.matchAll(dateRegex)];
+        if (!dateMatches.length) continue;
+        const date = toISODate(dateMatches[0][1]);
+        if (!date) continue;
+        let lineForAmount = line;
+        for (const dm of dateMatches) lineForAmount = lineForAmount.replace(dm[0], ' ');
+        const amounts = extractAmounts(lineForAmount);
+        if (!amounts.length) continue;
+        const rawAmount = amounts[amounts.length - 1];
+        const type = rawAmount < 0 ? 'expense' : (INCOME_KEYWORDS.test(line) ? 'income' : 'expense');
+        const desc = lineForAmount.replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        transactions.push({ date, amount: Math.abs(rawAmount), type, category: 'Autres', description: desc });
+      }
     }
   }
 
