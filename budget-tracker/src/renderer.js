@@ -159,7 +159,15 @@ document.getElementById('btn-save-tx').addEventListener('click', async () => {
   if (!date) return toast('Date requise', 'error');
 
   await window.api.addTransaction({ amount, type, category, description, date });
-  toast('Transaction ajoutée !');
+
+  if (document.getElementById('tx-recurring').checked) {
+    const day_of_month = new Date(date).getUTCDate();
+    await window.api.addRecurring({ amount, type, category, description, day_of_month });
+    toast('Transaction ajoutée et programmée chaque mois !');
+  } else {
+    toast('Transaction ajoutée !');
+  }
+
   document.getElementById('add-form-card').style.display = 'none';
   clearTxForm();
   loadTransactions();
@@ -170,6 +178,7 @@ function clearTxForm() {
   document.getElementById('tx-desc').value = '';
   document.getElementById('tx-date').value = '';
   document.getElementById('tx-income').checked = true;
+  document.getElementById('tx-recurring').checked = false;
 }
 
 document.getElementById('filter-type').addEventListener('change', loadTransactions);
