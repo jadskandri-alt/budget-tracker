@@ -46,6 +46,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (page === 'transactions') loadTransactions();
     if (page === 'budgets')      loadBudgets();
     if (page === 'categories')   loadCategories();
+    if (page === 'recurring')    loadRecurring();
     if (page === 'telegram')     loadTelegramPage();
   });
 });
@@ -404,6 +405,83 @@ document.getElementById('btn-export-pdf').addEventListener('click', async () => 
   if (result.success) toast('PDF exporté avec succès !');
   else toast('Export annulé', 'error');
 });
+
+// ─── RÉCURRENTS ───────────────────────────────────────────────────────────────────
+
+document.querySelectorAll('input[name=rec-type]').forEach(radio => {
+  radio.addEventListener('change', async () => {
+    const categories = await window.api.getCategories();
+    const recSel = document.getElementById('rec-category');
+    const filtered = categories.filter(c => c.type === radio.value || c.type === 'both');
+    recSel.innerHTML = filtered.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+  });
+});
+
+document.getElementById('btn-add-recurring').addEventListener('click', async () => {
+  const amount = parseFloat(document.getElementById('rec-amount').value);
+  const type = document.querySelector('input[name=rec-type]:checked').value;
+  const category = document.getElementById('rec-category').value;
+  const description = document.getElementById('rec-desc').value.trim();
+  const day_of_month = parseInt(document.getElementById('rec-day').value) || 1;
+
+  if (!amount || amount <= 0) return toast('Montant invalide', 'error');
+  if (!category) return toast('Sélectionne une catégorie', 'error');
+  if (day_of_month < 1 || day_of_month > 28) return toast('Jour invalide (1–28)', 'error');
+
+  await window.api.addRecurring({ amount, type, category, description, day_of_month });
+  toast('Transaction récurrente ajoutée !');
+  document.getElementById('rec-amount').value = '';
+  document.getElementById('rec-desc').value = '';
+  document.getElementById('rec-day').value = '1';
+  loadRecurring();
+});
+
+async function loadRecurring() {
+  const categories = await window.api.getCategories();
+  const recType = document.querySelector('input[name=rec-type]:checked')?.value || 'expense';
+  const recSel = document.getElementById('rec-category');
+  const filtered = categories.filter(c => c.type === recType || c.type === 'both');
+  recSel.innerHTML = filtered.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+
+  const list = await window.api.getRecurring();
+  const container = document.getElementById('recurring-list');
+  const empty = document.getElementById('recurring-empty');
+
+  if (list.length === 0) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  container.innerHTML = `
+    <table style="width:100%">
+      <thead><tr><th>Type</th><th>Catégorie</th><th>Description</th><th>Montant</th><th>Jour</th><th></th></tr></thead>
+      <tbody>
+        ${list.map(r => `
+          <tr>
+            <td><span class="badge badge-${r.type}">${r.type === 'income' ? 'Revenu' : 'Dépense'}</span></td>
+            <td>${r.category}</td>
+            <td style="color:var(--muted)">${r.description || '—'}</td>
+            <td class="amount-${r.type}">${r.type === 'income' ? '+' : '−'}${fmt(r.amount)}</td>
+            <td style="color:var(--muted)">le ${r.day_of_month}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="deleteRecurring(${r.id})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+window.deleteRecurring = async function(id) {
+  await window.api.deleteRecurring(id);
+  toast('Récurrence supprimée');
+  loadRecurring();
+};
 
 // ─── TELEGRAM ────────────────────────────────────────────────────────────────────
 

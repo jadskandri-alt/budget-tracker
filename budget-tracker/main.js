@@ -259,6 +259,22 @@ function initDatabase() {
       category     TEXT    UNIQUE NOT NULL,
       limit_amount REAL    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS recurring_transactions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount       REAL    NOT NULL,
+      type         TEXT    NOT NULL CHECK(type IN ('income','expense')),
+      category     TEXT    NOT NULL,
+      description  TEXT    DEFAULT '',
+      day_of_month INTEGER NOT NULL DEFAULT 1,
+      active       INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS recurring_applied (
+      recurring_id INTEGER NOT NULL,
+      month        TEXT    NOT NULL,
+      PRIMARY KEY (recurring_id, month)
+    );
   `);
 
   // Catégories par défaut
@@ -285,6 +301,38 @@ function initDatabase() {
   insertMany(defaultCategories);
 }
 
+// ─── Transactions récurrentes ─────────────────────────────────────────────────
+
+function applyRecurringTransactions() {
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const today = now.getDate();
+
+  const recurrings = db.prepare('SELECT * FROM recurring_transactions WHERE active=1').all();
+  const insert = db.prepare(
+    `INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)`
+  );
+  const markApplied = db.prepare(
+    `INSERT OR IGNORE INTO recurring_applied (recurring_id, month) VALUES (?, ?)`
+  );
+
+  const applyAll = db.transaction(() => {
+    for (const r of recurrings) {
+      const already = db.prepare(
+        'SELECT 1 FROM recurring_applied WHERE recurring_id=? AND month=?'
+      ).get(r.id, month);
+      if (already) continue;
+      if (today < r.day_of_month) continue; // pas encore le bon jour
+
+      const day = Math.min(r.day_of_month, new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate());
+      const date = `${month}-${String(day).padStart(2, '0')}`;
+      insert.run(r.amount, r.type, r.category, r.description, date);
+      markApplied.run(r.id, month);
+    }
+  });
+  applyAll();
+}
+
 // ─── Fenêtre principale ────────────────────────────────────────────────────────
 
 function createWindow() {
@@ -307,6 +355,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   initDatabase();
+  applyRecurringTransactions();
   createWindow();
   startTelegramPolling();
 
@@ -729,5 +778,27 @@ ipcMain.handle('telegram:connect', async (_, token) => {
 ipcMain.handle('telegram:disconnect', () => {
   stopTelegramPolling();
   saveSettings({ telegramToken: null, telegramChatId: null, telegramOffset: 0 });
+  return { success: true };
+});
+
+// ─── Transactions récurrentes IPC ─────────────────────────────────────────────
+
+ipcMain.handle('recurring:get', () => {
+  return db.prepare('SELECT * FROM recurring_transactions ORDER BY id DESC').all();
+});
+
+ipcMain.handle('recurring:add', (_, data) => {
+  const stmt = db.prepare(
+    `INSERT INTO recurring_transactions (amount, type, category, description, day_of_month) VALUES (?, ?, ?, ?, ?)`
+  );
+  const result = stmt.run(data.amount, data.type, data.category, data.description || '', data.day_of_month || 1);
+  // Apply immediately if today >= day_of_month and not yet applied this month
+  applyRecurringTransactions();
+  return { id: result.lastInsertRowid, ...data };
+});
+
+ipcMain.handle('recurring:delete', (_, id) => {
+  db.prepare('DELETE FROM recurring_transactions WHERE id=?').run(id);
+  db.prepare('DELETE FROM recurring_applied WHERE recurring_id=?').run(id);
   return { success: true };
 });

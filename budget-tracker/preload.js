@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('api', {
   importPDF:     ()     => ipcRenderer.invoke('import:pdf'),
   importConfirm: (txs)  => ipcRenderer.invoke('import:confirm', txs),
 
+  // Récurrents
+  getRecurring:    ()     => ipcRenderer.invoke('recurring:get'),
+  addRecurring:    (data) => ipcRenderer.invoke('recurring:add', data),
+  deleteRecurring: (id)   => ipcRenderer.invoke('recurring:delete', id),
+
   // Paramètres & Telegram
   settingsGet:        ()      => ipcRenderer.invoke('settings:get'),
   telegramConnect:    (token) => ipcRenderer.invoke('telegram:connect', token),
