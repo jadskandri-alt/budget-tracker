@@ -326,6 +326,71 @@ window.deleteCat = async function(name) {
   loadCategories();
 };
 
+// ─── IMPORT ──────────────────────────────────────────────────────────────────────
+
+let pendingImport = [];
+
+document.getElementById('btn-import-csv').addEventListener('click', async () => {
+  const result = await window.api.importCSV();
+  if (!result.success) return;
+  if (result.transactions.length === 0) return toast('Aucune transaction détectée dans ce fichier', 'error');
+  showImportPreview(result.transactions);
+});
+
+document.getElementById('btn-import-pdf').addEventListener('click', async () => {
+  const result = await window.api.importPDF();
+  if (!result.success) return;
+  if (result.transactions.length === 0) return toast('Aucune transaction détectée dans ce PDF', 'error');
+  showImportPreview(result.transactions);
+});
+
+function showImportPreview(transactions) {
+  pendingImport = transactions;
+  const card = document.getElementById('import-preview-card');
+  const tbody = document.getElementById('import-preview-tbody');
+  const count = document.getElementById('import-preview-count');
+
+  count.textContent = `${transactions.length} transaction${transactions.length > 1 ? 's' : ''} détectée${transactions.length > 1 ? 's' : ''}`;
+
+  tbody.innerHTML = transactions.map((t, i) => `
+    <tr>
+      <td>${fmtDate(t.date)}</td>
+      <td><span class="badge badge-${t.type}">${t.type === 'income' ? 'Revenu' : 'Dépense'}</span></td>
+      <td>
+        <select onchange="pendingImport[${i}].category=this.value" style="border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:12px;">
+          ${window._categories.map(c => `<option value="${c.name}" ${c.name === t.category ? 'selected' : ''}>${c.name}</option>`).join('')}
+        </select>
+      </td>
+      <td style="color:var(--muted);font-size:12px;">${t.description || '—'}</td>
+      <td class="amount-${t.type}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="removeImportRow(${i})">×</button>
+      </td>
+    </tr>
+  `).join('');
+
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth' });
+}
+
+window.removeImportRow = function(i) {
+  pendingImport.splice(i, 1);
+  showImportPreview(pendingImport);
+};
+
+document.getElementById('btn-import-cancel').addEventListener('click', () => {
+  pendingImport = [];
+  document.getElementById('import-preview-card').style.display = 'none';
+});
+
+document.getElementById('btn-import-confirm').addEventListener('click', async () => {
+  if (!pendingImport.length) return;
+  const result = await window.api.importConfirm(pendingImport);
+  toast(`${result.count} transaction${result.count > 1 ? 's' : ''} importée${result.count > 1 ? 's' : ''} !`);
+  pendingImport = [];
+  document.getElementById('import-preview-card').style.display = 'none';
+});
+
 // ─── EXPORT ──────────────────────────────────────────────────────────────────────
 document.getElementById('btn-export-csv').addEventListener('click', async () => {
   const result = await window.api.exportCSV();
@@ -346,6 +411,7 @@ async function init() {
   document.getElementById('filter-month').value = currentYearMonth();
 
   const categories = await window.api.getCategories();
+  window._categories = categories;
   populateCategorySelects(categories, 'expense');
 
   await loadDashboard();

@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld('api', {
   // Export
   exportCSV: () => ipcRenderer.invoke('export:csv'),
   exportPDF: () => ipcRenderer.invoke('export:pdf'),
+
+  // Import
+  importCSV:     ()     => ipcRenderer.invoke('import:csv'),
+  importPDF:     ()     => ipcRenderer.invoke('import:pdf'),
+  importConfirm: (txs)  => ipcRenderer.invoke('import:confirm', txs),
 });

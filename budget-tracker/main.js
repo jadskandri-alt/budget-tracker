@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const pdfParse = require('pdf-parse');
 
 // Dossier de données de l'application
 const userDataPath = app.getPath('userData');
@@ -260,4 +261,224 @@ ipcMain.handle('export:pdf', async () => {
   fs.writeFileSync(filePath, data);
   shell.showItemInFolder(filePath);
   return { success: true, filePath };
+});
+
+// ─── Import CSV ────────────────────────────────────────────────────────────────
+
+function parseCSVLine(line) {
+  const result = [];
+  let cur = '', inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuote = !inQuote; }
+    else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function toISODate(str) {
+  // Accepte DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
+  str = str.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const m = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (!m) return null;
+  let [, d, mo, y] = m;
+  if (y.length === 2) y = '20' + y;
+  return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+}
+
+function parseAmount(str) {
+  if (!str) return null;
+  const cleaned = str.replace(/\s/g,'').replace(',','.').replace(/[^0-9.\-]/g,'');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : Math.abs(n);
+}
+
+ipcMain.handle('import:csv', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Importer un fichier CSV',
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths.length) return { success: false };
+
+  const raw = fs.readFileSync(filePaths[0], 'utf8').replace(/^\uFEFF/, '');
+  const lines = raw.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return { success: false, error: 'Fichier vide' };
+
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/['"éèêàùç ]/g, c => ({é:'e',è:'e',ê:'e',à:'a',ù:'u',ç:'c',' ':'_'}[c]||'')));
+
+  // Détection colonnes
+  const col = {
+    date:        headers.findIndex(h => /date/.test(h)),
+    amount:      headers.findIndex(h => /montant|amount|credit|crédit|debit|débit/.test(h)),
+    debit:       headers.findIndex(h => /debit|débit/.test(h)),
+    credit:      headers.findIndex(h => /credit|crédit/.test(h)),
+    type:        headers.findIndex(h => /type/.test(h)),
+    category:    headers.findIndex(h => /cat/.test(h)),
+    description: headers.findIndex(h => /desc|libelle|libellé|label|note/.test(h)),
+  };
+
+  const transactions = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length < 2) continue;
+
+    const dateStr = col.date >= 0 ? cols[col.date] : null;
+    const date = dateStr ? toISODate(dateStr) : null;
+    if (!date) continue;
+
+    let amount = null, type = 'expense';
+
+    if (col.debit >= 0 && col.credit >= 0) {
+      const debit  = parseAmount(cols[col.debit]);
+      const credit = parseAmount(cols[col.credit]);
+      if (credit && credit > 0) { amount = credit; type = 'income'; }
+      else if (debit && debit > 0) { amount = debit; type = 'expense'; }
+    } else if (col.amount >= 0) {
+      const raw = cols[col.amount].replace(/\s/g,'').replace(',','.');
+      const n = parseFloat(raw.replace(/[^0-9.\-]/g,''));
+      if (!isNaN(n)) { amount = Math.abs(n); type = n < 0 ? 'expense' : 'income'; }
+    }
+    if (!amount) continue;
+
+    // Type explicite (notre propre export)
+    if (col.type >= 0) {
+      const t = cols[col.type].toLowerCase();
+      if (t === 'revenu' || t === 'income') type = 'income';
+      else if (t === 'dépense' || t === 'depense' || t === 'expense') type = 'expense';
+    }
+
+    const category    = col.category    >= 0 ? cols[col.category]    || 'Autres' : 'Autres';
+    const description = col.description >= 0 ? cols[col.description] || ''       : '';
+
+    transactions.push({ date, amount, type, category, description });
+  }
+
+  return { success: true, transactions, total: transactions.length };
+});
+
+ipcMain.handle('import:confirm', (_, transactions) => {
+  const insert = db.prepare(
+    `INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)`
+  );
+  const insertMany = db.transaction((txs) => {
+    for (const t of txs) insert.run(t.amount, t.type, t.category, t.description || '', t.date);
+  });
+  insertMany(transactions);
+  return { success: true, count: transactions.length };
+});
+
+// ─── Import PDF ────────────────────────────────────────────────────────────────
+
+function extractAmounts(lineWithoutDates) {
+  // Stratégie 1 : virgule comme séparateur décimal (format français)
+  // Ex: 1 234,56 / -1234,56 / 1234,56-
+  const frPattern = /([+-])?\s*(\d{1,3}(?:[\s\u00a0]\d{3})*|\d+)[,](\d{2})([+-])?/g;
+  const results = [];
+
+  for (const m of lineWithoutDates.matchAll(frPattern)) {
+    const signBefore = m[1] || '';
+    const signAfter  = m[4] || '';
+    const sign = (signBefore === '-' || signAfter === '-') ? -1 : 1;
+    const intPart = m[2].replace(/\s|\u00a0/g, '');
+    const decPart = m[3];
+    const value = sign * parseFloat(`${intPart}.${decPart}`);
+    if (!isNaN(value) && value !== 0) results.push(value);
+  }
+
+  if (results.length > 0) return results;
+
+  // Stratégie 2 : point comme séparateur décimal, mais seulement si partie entière > 31
+  // (pour éviter de confondre 14.03 avec une date)
+  const enPattern = /([+-])?\s*(\d+)[.](\d{2})([+-])?/g;
+  for (const m of lineWithoutDates.matchAll(enPattern)) {
+    const intVal = parseInt(m[2]);
+    if (intVal <= 31) continue; // trop petit, ressemble à une date
+    const signBefore = m[1] || '';
+    const signAfter  = m[4] || '';
+    const sign = (signBefore === '-' || signAfter === '-') ? -1 : 1;
+    const value = sign * parseFloat(`${m[2]}.${m[3]}`);
+    if (!isNaN(value) && value !== 0) results.push(value);
+  }
+
+  return results;
+}
+
+// Mots-clés indiquant une dépense
+const EXPENSE_KEYWORDS = /\b(cb|carte|prelevement|prélèvement|virement|facture|achat|retrait|dab|frais|commission|loyer|assurance|abonnement|cotisation|impot|taxe)\b/i;
+const INCOME_KEYWORDS  = /\b(salaire|vir recu|virement recu|remboursement|avoir|credit|crédit reçu|pension|allocation)\b/i;
+
+ipcMain.handle('import:pdf', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Importer un relevé PDF',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths.length) return { success: false };
+
+  const buffer = fs.readFileSync(filePaths[0]);
+  const pdfData = await pdfParse(buffer);
+  const text = pdfData.text;
+
+  // Pattern date : DD/MM/YY ou DD/MM/YYYY ou DD-MM-YYYY
+  const dateRegex = /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](\d{4}|\d{2}))\b/g;
+
+  const transactions = [];
+  const lines = text.split('\n');
+
+  for (const line of lines) {
+    if (line.trim().length < 5) continue;
+
+    // Extraire toutes les dates de la ligne
+    const dateMatches = [...line.matchAll(dateRegex)];
+    if (dateMatches.length === 0) continue;
+
+    const date = toISODate(dateMatches[0][1]);
+    if (!date) continue;
+
+    // Supprimer toutes les dates de la ligne avant de chercher les montants
+    let lineForAmount = line;
+    for (const dm of dateMatches) {
+      lineForAmount = lineForAmount.replace(dm[0], ' ');
+    }
+
+    const amounts = extractAmounts(lineForAmount);
+    if (amounts.length === 0) continue;
+
+    // Prendre le dernier montant (généralement le montant de l'opération en fin de ligne)
+    const rawAmount = amounts[amounts.length - 1];
+
+    // Déterminer le type par signe puis par mots-clés
+    let type;
+    if (rawAmount < 0) {
+      type = 'expense';
+    } else if (rawAmount > 0) {
+      // Analyser les mots-clés pour affiner
+      if (EXPENSE_KEYWORDS.test(line)) type = 'expense';
+      else if (INCOME_KEYWORDS.test(line)) type = 'income';
+      else type = 'expense'; // par défaut : dépense
+    } else {
+      continue;
+    }
+
+    // Description : enlever dates et montants, garder le texte utile
+    const desc = lineForAmount
+      .replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+
+    transactions.push({
+      date,
+      amount: Math.abs(rawAmount),
+      type,
+      category: 'Autres',
+      description: desc,
+    });
+  }
+
+  return { success: true, transactions, total: transactions.length };
 });

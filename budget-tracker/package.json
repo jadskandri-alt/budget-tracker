@@ -10,6 +10,7 @@
     "electron": "^33.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^11.5.0"
+    "better-sqlite3": "^11.5.0",
+    "pdf-parse": "^2.4.5"
   }
 }
