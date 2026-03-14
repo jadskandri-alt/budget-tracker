@@ -423,61 +423,63 @@ ipcMain.handle('import:pdf', async () => {
   const pdfData = await pdfParse(buffer);
   const text = pdfData.text;
 
-  // Pattern date : DD/MM/YY ou DD/MM/YYYY ou DD-MM-YYYY
-  const dateRegex = /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](\d{4}|\d{2}))\b/g;
-
   const transactions = [];
   const lines = text.split('\n');
 
+  // Stratégie 1 : montant EN FIN DE LIGNE avec signe +/- explicite
+  // Format : "5.000,00-"  "427,00+"  "99,00-"  (point=milliers, virgule=décimale)
+  const amountEndRe  = /(\d{1,3}(?:\.\d{3})*,\d{2})([+-])\s*$/;
+  const dateStartRe  = /^(\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:\d{4}|\d{2}))/;
+  const anyDateRe    = /\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:\d{4}|\d{2})/g;
+
   for (const line of lines) {
-    if (line.trim().length < 5) continue;
+    const t = line.trim();
+    if (t.length < 8) continue;
 
-    // Extraire toutes les dates de la ligne
-    const dateMatches = [...line.matchAll(dateRegex)];
-    if (dateMatches.length === 0) continue;
+    const amountMatch = t.match(amountEndRe);
+    if (!amountMatch) continue;
 
-    const date = toISODate(dateMatches[0][1]);
+    const dateMatch = t.match(dateStartRe);
+    if (!dateMatch) continue;
+
+    const date = toISODate(dateMatch[1]);
     if (!date) continue;
 
-    // Supprimer toutes les dates de la ligne avant de chercher les montants
-    let lineForAmount = line;
-    for (const dm of dateMatches) {
-      lineForAmount = lineForAmount.replace(dm[0], ' ');
-    }
+    // Supprimer les séparateurs de milliers (points), convertir virgule→point
+    const amountStr = amountMatch[1].replace(/\./g, '').replace(',', '.');
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount === 0) continue;
 
-    const amounts = extractAmounts(lineForAmount);
-    if (amounts.length === 0) continue;
+    const type = amountMatch[2] === '+' ? 'income' : 'expense';
 
-    // Prendre le dernier montant (généralement le montant de l'opération en fin de ligne)
-    const rawAmount = amounts[amounts.length - 1];
-
-    // Déterminer le type par signe puis par mots-clés
-    let type;
-    if (rawAmount < 0) {
-      type = 'expense';
-    } else if (rawAmount > 0) {
-      // Analyser les mots-clés pour affiner
-      if (EXPENSE_KEYWORDS.test(line)) type = 'expense';
-      else if (INCOME_KEYWORDS.test(line)) type = 'income';
-      else type = 'expense'; // par défaut : dépense
-    } else {
-      continue;
-    }
-
-    // Description : enlever dates et montants, garder le texte utile
-    const desc = lineForAmount
-      .replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '')
+    const desc = t
+      .replace(amountMatch[0], '')
+      .replace(anyDateRe, '')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 80);
 
-    transactions.push({
-      date,
-      amount: Math.abs(rawAmount),
-      type,
-      category: 'Autres',
-      description: desc,
-    });
+    transactions.push({ date, amount, type, category: 'Autres', description: desc });
+  }
+
+  // Stratégie 2 (fallback) : format générique virgule/point décimal, signe avant
+  if (transactions.length === 0) {
+    const dateRegex = /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](\d{4}|\d{2}))\b/g;
+    for (const line of lines) {
+      if (line.trim().length < 5) continue;
+      const dateMatches = [...line.matchAll(dateRegex)];
+      if (!dateMatches.length) continue;
+      const date = toISODate(dateMatches[0][1]);
+      if (!date) continue;
+      let lineForAmount = line;
+      for (const dm of dateMatches) lineForAmount = lineForAmount.replace(dm[0], ' ');
+      const amounts = extractAmounts(lineForAmount);
+      if (!amounts.length) continue;
+      const rawAmount = amounts[amounts.length - 1];
+      const type = rawAmount < 0 ? 'expense' : (INCOME_KEYWORDS.test(line) ? 'income' : 'expense');
+      const desc = lineForAmount.replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      transactions.push({ date, amount: Math.abs(rawAmount), type, category: 'Autres', description: desc });
+    }
   }
 
   return { success: true, transactions, total: transactions.length };
