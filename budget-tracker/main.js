@@ -75,6 +75,8 @@ function telegramAnswerCallback(token, callbackQueryId) {
 
 // Transactions en attente de catégorisation : clé = "chatId_msgId"
 const pendingTxs = new Map();
+// Dernière transaction ajoutée via Telegram par chat (pour /annuler)
+const lastTelegramTx = new Map();
 
 function parseTelegramMessage(text) {
   const m = text.match(/(\d+[.,]\d{1,2}|\d+)/);
@@ -99,6 +101,22 @@ function buildTypeKeyboard() {
     { text: '💸 Dépense', callback_data: 'type:expense' },
     { text: '✅ Revenu',  callback_data: 'type:income'  },
   ]];
+}
+
+function buildUndoKeyboard(txId) {
+  return [[{ text: '🗑 Annuler', callback_data: `delete:${txId}` }]];
+}
+
+async function saveTelegramTx(token, chatId, tx) {
+  const result = db.prepare('INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)').run(tx.amount, tx.type, tx.category, tx.description, tx.date);
+  const txId = result.lastInsertRowid;
+  lastTelegramTx.set(chatId.toString(), txId);
+  const e = tx.type === 'income' ? '✅' : '💸';
+  await telegramSendKeyboard(token, chatId,
+    `${e} *Enregistré !*\n\n${tx.description ? `📝 ${tx.description}\n` : ''}💶 ${tx.amount.toFixed(2)} €\n🏷 ${tx.category}`,
+    buildUndoKeyboard(txId)
+  );
+  if (mainWindow) mainWindow.webContents.send('telegram:new-tx');
 }
 
 function buildCategoryKeyboard(cats, type) {
@@ -142,22 +160,33 @@ async function startTelegramPolling() {
             telegramAnswerCallback(token, cb.id);
 
             if (data.startsWith('type:')) {
-              // L'utilisateur a choisi dépense ou revenu → montrer les catégories
+              // L'utilisateur a choisi dépense ou revenu
               const type = data.slice(5);
               const tx = pendingTxs.get(key);
               if (tx) {
                 tx.type = type;
-                const cats = db.prepare('SELECT * FROM categories').all();
-                const keyboard = buildCategoryKeyboard(cats, type);
+                const guessed = guessCategory(tx.description);
                 const e = type === 'income' ? '✅' : '💸';
-                telegramEditMessage(token, chatId, msgId,
-                  `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nChoisis une catégorie :`
-                );
-                // Envoyer un nouveau message avec le clavier des catégories
-                const sent = await telegramSendKeyboard(token, chatId, 'Catégorie :', keyboard);
-                if (sent.ok) {
+                if (guessed !== 'Autres') {
+                  // Catégorie détectée → auto-save
+                  tx.category = guessed;
                   pendingTxs.delete(key);
-                  pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+                  telegramEditMessage(token, chatId, msgId,
+                    `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\n🏷 Catégorie détectée : *${guessed}*`
+                  );
+                  await saveTelegramTx(token, chatId, tx);
+                } else {
+                  // Demander la catégorie
+                  const cats = db.prepare('SELECT * FROM categories').all();
+                  const keyboard = buildCategoryKeyboard(cats, type);
+                  telegramEditMessage(token, chatId, msgId,
+                    `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nChoisis une catégorie :`
+                  );
+                  const sent = await telegramSendKeyboard(token, chatId, 'Catégorie :', keyboard);
+                  if (sent.ok) {
+                    pendingTxs.delete(key);
+                    pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+                  }
                 }
               }
             } else if (data.startsWith('cat:')) {
@@ -165,12 +194,16 @@ async function startTelegramPolling() {
               const tx = pendingTxs.get(key);
               if (tx) {
                 tx.category = category;
-                db.prepare('INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)').run(tx.amount, tx.type, tx.category, tx.description, tx.date);
                 pendingTxs.delete(key);
                 const e = tx.type === 'income' ? '✅' : '💸';
-                telegramEditMessage(token, chatId, msgId, `${e} *Enregistré !*\n\n${tx.description ? `📝 ${tx.description}\n` : ''}💶 ${tx.amount.toFixed(2)} €\n🏷 ${category}`);
-                if (mainWindow) mainWindow.webContents.send('telegram:new-tx');
+                telegramEditMessage(token, chatId, msgId, `${e} *${tx.amount.toFixed(2)} €* — 🏷 ${category}`);
+                await saveTelegramTx(token, chatId, tx);
               }
+            } else if (data.startsWith('delete:')) {
+              const txId = parseInt(data.slice(7));
+              db.prepare('DELETE FROM transactions WHERE id=?').run(txId);
+              telegramEditMessage(token, chatId, msgId, '🗑 *Transaction supprimée.*');
+              if (mainWindow) mainWindow.webContents.send('telegram:new-tx');
             }
             continue;
           }
@@ -188,17 +221,53 @@ async function startTelegramPolling() {
           const text = msg.text.trim();
           if (text === '/start') {
             saveSettings({ telegramChatId: chatId });
-            telegramSend(token, chatId, '✅ *Bot connecté !*\n\nEnvoie tes dépenses :\n\n• `café 4.50` → dépense\n• `salaire 3000+` → revenu\n\nLe bot te demandera ensuite la catégorie.\n\n/solde — solde du mois\n/aide — aide');
+            telegramSend(token, chatId, '✅ *Bot connecté !*\n\nEnvoie tes dépenses :\n\n• `café 4.50` → dépense\n• `salaire 3000+` → revenu\n\n/solde — solde du mois\n/liste — 5 dernières transactions\n/budget — état des budgets\n/annuler — annuler la dernière saisie\n/aide — aide');
           } else if (text === '/solde') {
             const month = new Date().toISOString().slice(0, 7);
             const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) as inc, COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) as exp FROM transactions WHERE strftime('%Y-%m', date)=?`).get(month);
             const bal = r.inc - r.exp;
             telegramSend(token, chatId, `📊 *Ce mois-ci :*\n\n✅ Revenus : ${r.inc.toFixed(2)} €\n💸 Dépenses : ${r.exp.toFixed(2)} €\n💰 Solde : ${bal >= 0 ? '+' : ''}${bal.toFixed(2)} €`);
+          } else if (text === '/liste') {
+            const txs = db.prepare('SELECT * FROM transactions ORDER BY date DESC, id DESC LIMIT 5').all();
+            if (!txs.length) {
+              telegramSend(token, chatId, '📋 Aucune transaction enregistrée.');
+            } else {
+              const lines = txs.map(t => {
+                const e = t.type === 'income' ? '✅' : '💸';
+                return `${e} ${t.date} — *${t.amount.toFixed(2)} €* (${t.category})${t.description ? ` — _${t.description}_` : ''}`;
+              }).join('\n');
+              telegramSend(token, chatId, `📋 *5 dernières transactions :*\n\n${lines}`);
+            }
+          } else if (text === '/budget') {
+            const month = new Date().toISOString().slice(0, 7);
+            const budgets = db.prepare('SELECT * FROM budgets').all();
+            if (!budgets.length) {
+              telegramSend(token, chatId, '📊 Aucun budget défini.');
+            } else {
+              const lines = budgets.map(b => {
+                const spent = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND category=? AND strftime('%Y-%m',date)=?`).get(b.category, month);
+                const pct = Math.round((spent.total / b.limit_amount) * 100);
+                const icon = pct >= 100 ? '🔴' : pct >= 80 ? '🟠' : '🟢';
+                return `${icon} *${b.category}* : ${spent.total.toFixed(2)} / ${b.limit_amount.toFixed(2)} € (${pct}%)`;
+              }).join('\n');
+              telegramSend(token, chatId, `📊 *Budgets ce mois :*\n\n${lines}`);
+            }
+          } else if (text === '/annuler') {
+            const txId = lastTelegramTx.get(chatId.toString());
+            if (txId) {
+              db.prepare('DELETE FROM transactions WHERE id=?').run(txId);
+              lastTelegramTx.delete(chatId.toString());
+              telegramSend(token, chatId, '🗑 Dernière transaction supprimée.');
+              if (mainWindow) mainWindow.webContents.send('telegram:new-tx');
+            } else {
+              telegramSend(token, chatId, 'Aucune transaction récente à annuler.');
+            }
           } else if (text === '/aide') {
-            telegramSend(token, chatId, '📖 *Formats acceptés :*\n\n• `café 4.50` → dépense 4.50€\n• `salaire 3000+` → revenu 3000€\n• `café 4.50 -` → dépense explicite\n\n/solde — solde du mois\n/aide — ce message');
+            telegramSend(token, chatId, '📖 *Formats acceptés :*\n\n• `café 4.50` → dépense 4.50€\n• `salaire 3000+` → revenu 3000€\n• `loyer 800 -` → dépense + auto-catégorie\n\n*/Commandes :*\n/solde — solde du mois\n/liste — 5 dernières transactions\n/budget — état des budgets\n/annuler — annuler la dernière saisie');
           } else {
             const tx = parseTelegramMessage(text);
             if (tx) {
+              const guessed = guessCategory(tx.description);
               if (tx.type === null) {
                 // Type non précisé → demander dépense ou revenu
                 const sent = await telegramSendKeyboard(token, chatId,
@@ -206,8 +275,14 @@ async function startTelegramPolling() {
                   buildTypeKeyboard()
                 );
                 if (sent.ok) pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+              } else if (guessed !== 'Autres') {
+                // Type ET catégorie connus → auto-save
+                tx.category = guessed;
+                const e = tx.type === 'income' ? '✅' : '💸';
+                telegramSend(token, chatId, `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\n🏷 Catégorie détectée : *${guessed}*`);
+                await saveTelegramTx(token, chatId, tx);
               } else {
-                // Type explicite (+/-) → aller directement aux catégories
+                // Type explicite, catégorie inconnue → demander catégorie
                 const cats = db.prepare('SELECT * FROM categories').all();
                 const keyboard = buildCategoryKeyboard(cats, tx.type);
                 const e = tx.type === 'income' ? '✅' : '💸';
