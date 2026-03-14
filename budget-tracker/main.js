@@ -85,11 +85,20 @@ function parseTelegramMessage(text) {
   const desc = text.slice(0, m.index).trim();
   const after = text.slice(m.index + m[0].length).trim();
 
-  let type = 'expense';
+  // Type explicite avec + ou -
+  let type = null;
   if (after.startsWith('+') || /\b(salaire|revenu|income|remboursement|allocation|pension)\b/i.test(desc)) type = 'income';
   else if (after.startsWith('-')) type = 'expense';
+  // Sinon type = null → on demandera à l'utilisateur
 
   return { amount, type, description: desc || '', date: new Date().toISOString().slice(0, 10) };
+}
+
+function buildTypeKeyboard() {
+  return [[
+    { text: '💸 Dépense', callback_data: 'type:expense' },
+    { text: '✅ Revenu',  callback_data: 'type:income'  },
+  ]];
 }
 
 function buildCategoryKeyboard(cats, type) {
@@ -122,18 +131,37 @@ async function startTelegramPolling() {
           telegramOffset = update.update_id + 1;
           const token = loadSettings().telegramToken;
 
-          // ── Callback d'un bouton de catégorie ──────────────────────────────
+          // ── Callback d'un bouton (type ou catégorie) ───────────────────────
           if (update.callback_query) {
             const cb = update.callback_query;
             const chatId = cb.message.chat.id;
             const msgId  = cb.message.message_id;
             const data   = cb.data;
+            const key    = `${chatId}_${msgId}`;
 
             telegramAnswerCallback(token, cb.id);
 
-            if (data.startsWith('cat:')) {
+            if (data.startsWith('type:')) {
+              // L'utilisateur a choisi dépense ou revenu → montrer les catégories
+              const type = data.slice(5);
+              const tx = pendingTxs.get(key);
+              if (tx) {
+                tx.type = type;
+                const cats = db.prepare('SELECT * FROM categories').all();
+                const keyboard = buildCategoryKeyboard(cats, type);
+                const e = type === 'income' ? '✅' : '💸';
+                telegramEditMessage(token, chatId, msgId,
+                  `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nChoisis une catégorie :`
+                );
+                // Envoyer un nouveau message avec le clavier des catégories
+                const sent = await telegramSendKeyboard(token, chatId, 'Catégorie :', keyboard);
+                if (sent.ok) {
+                  pendingTxs.delete(key);
+                  pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+                }
+              }
+            } else if (data.startsWith('cat:')) {
               const category = data.slice(4);
-              const key = `${chatId}_${msgId}`;
               const tx = pendingTxs.get(key);
               if (tx) {
                 tx.category = category;
@@ -171,15 +199,23 @@ async function startTelegramPolling() {
           } else {
             const tx = parseTelegramMessage(text);
             if (tx) {
-              const cats = db.prepare('SELECT * FROM categories').all();
-              const keyboard = buildCategoryKeyboard(cats, tx.type);
-              const e = tx.type === 'income' ? '✅' : '💸';
-              const sent = await telegramSendKeyboard(token, chatId,
-                `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nChoisis une catégorie :`,
-                keyboard
-              );
-              if (sent.ok) {
-                pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+              if (tx.type === null) {
+                // Type non précisé → demander dépense ou revenu
+                const sent = await telegramSendKeyboard(token, chatId,
+                  `💰 *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nC'est une dépense ou un revenu ?`,
+                  buildTypeKeyboard()
+                );
+                if (sent.ok) pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
+              } else {
+                // Type explicite (+/-) → aller directement aux catégories
+                const cats = db.prepare('SELECT * FROM categories').all();
+                const keyboard = buildCategoryKeyboard(cats, tx.type);
+                const e = tx.type === 'income' ? '✅' : '💸';
+                const sent = await telegramSendKeyboard(token, chatId,
+                  `${e} *${tx.amount.toFixed(2)} €*${tx.description ? ` — ${tx.description}` : ''}\n\nChoisis une catégorie :`,
+                  keyboard
+                );
+                if (sent.ok) pendingTxs.set(`${chatId}_${sent.result.message_id}`, tx);
               }
             } else {
               telegramSend(token, chatId, '❓ Format non reconnu.\n\nExemple : `café 4.50` ou `salaire 3000+`\n\n/aide pour plus d\'infos');
