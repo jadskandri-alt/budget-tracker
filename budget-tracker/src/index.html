@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Budget Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ─── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+        <path d="M12 6v6l4 2"/>
+      </svg>
+      Budget
+    </div>
+
+    <nav class="nav">
+      <div class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        Tableau de bord
+      </div>
+      <div class="nav-item" data-page="transactions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
+        </svg>
+        Transactions
+      </div>
+      <div class="nav-item" data-page="budgets">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z"/>
+          <path d="M15 19V9a2 2 0 012-2h2a2 2 0 012 2v10a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          <path d="M9 13H5M21 9h-4M3 3h18"/>
+        </svg>
+        Budgets
+      </div>
+      <div class="nav-item" data-page="categories">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 6h16M4 12h16M4 18h7"/>
+        </svg>
+        Catégories
+      </div>
+      <div class="nav-item" data-page="export">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Exporter
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">Budget Tracker v1.0</div>
+  </aside>
+
+  <!-- ─── Main ─────────────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Dashboard -->
+    <section class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Tableau de bord</div>
+          <div class="page-sub" id="dash-period"></div>
+        </div>
+        <div class="month-nav">
+          <button id="dash-prev">‹</button>
+          <span id="dash-month-label"></span>
+          <button id="dash-next">›</button>
+        </div>
+      </div>
+
+      <div class="cards-row">
+        <div class="card stat-card income">
+          <div class="label">Revenus</div>
+          <div class="amount income" id="stat-income">0 €</div>
+          <div class="stat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+              <polyline points="17 6 23 6 23 12"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card stat-card expense">
+          <div class="label">Dépenses</div>
+          <div class="amount expense" id="stat-expense">0 €</div>
+          <div class="stat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/>
+              <polyline points="17 18 23 18 23 12"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card stat-card balance">
+          <div class="label">Solde</div>
+          <div class="amount balance" id="stat-balance">0 €</div>
+          <div class="stat-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="1" x2="12" y2="23"/>
+              <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="card">
+          <div class="chart-title">Revenus vs Dépenses — 6 derniers mois</div>
+          <div class="chart-wrap"><canvas id="chart-bar"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="chart-title">Dépenses par catégorie</div>
+          <div class="chart-wrap"><canvas id="chart-doughnut"></canvas></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="chart-title">Dernières transactions</div>
+        <div class="table-wrap">
+          <table id="dash-table">
+            <thead><tr><th>Date</th><th>Catégorie</th><th>Description</th><th>Type</th><th>Montant</th></tr></thead>
+            <tbody id="dash-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Transactions -->
+    <section class="page" id="page-transactions">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Transactions</div>
+          <div class="page-sub">Gérer vos revenus et dépenses</div>
+        </div>
+        <button class="btn btn-primary" id="btn-show-add-form">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Ajouter
+        </button>
+      </div>
+
+      <!-- Formulaire ajout -->
+      <div class="card section-gap" id="add-form-card" style="display:none;margin-bottom:16px;">
+        <div style="font-weight:700;font-size:15px;">Nouvelle transaction</div>
+
+        <div class="type-toggle">
+          <input type="radio" name="tx-type" id="tx-income" value="income" checked>
+          <label for="tx-income" class="income-label">+ Revenu</label>
+          <input type="radio" name="tx-type" id="tx-expense" value="expense">
+          <label for="tx-expense" class="expense-label">− Dépense</label>
+        </div>
+
+        <div class="form-row form-row-3">
+          <div class="field">
+            <label>Montant (€)</label>
+            <input type="number" id="tx-amount" placeholder="0.00" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label>Catégorie</label>
+            <select id="tx-category"></select>
+          </div>
+          <div class="field">
+            <label>Date</label>
+            <input type="date" id="tx-date">
+          </div>
+        </div>
+        <div class="field">
+          <label>Description (optionnel)</label>
+          <input type="text" id="tx-desc" placeholder="Notes…">
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" id="btn-save-tx">Enregistrer</button>
+          <button class="btn btn-outline" id="btn-cancel-tx">Annuler</button>
+        </div>
+      </div>
+
+      <!-- Filtres -->
+      <div class="card" style="margin-bottom:16px;padding:14px 20px;">
+        <div class="filters">
+          <select id="filter-type">
+            <option value="">Tous les types</option>
+            <option value="income">Revenus</option>
+            <option value="expense">Dépenses</option>
+          </select>
+          <select id="filter-cat">
+            <option value="">Toutes catégories</option>
+          </select>
+          <input type="month" id="filter-month">
+          <button class="btn btn-outline btn-sm" id="btn-clear-filters">Réinitialiser</button>
+        </div>
+      </div>
+
+      <!-- Liste -->
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Description</th><th>Montant</th><th></th></tr></thead>
+            <tbody id="tx-tbody"></tbody>
+          </table>
+          <div id="tx-empty" class="empty-state" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            Aucune transaction trouvée
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Budgets -->
+    <section class="page" id="page-budgets">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Budgets par catégorie</div>
+          <div class="page-sub">Mois en cours</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start;">
+        <div class="card">
+          <div class="budget-list" id="budget-list"></div>
+          <div id="budget-empty" class="empty-state" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            Aucun budget défini
+          </div>
+        </div>
+
+        <div class="card section-gap">
+          <div style="font-weight:700;font-size:15px;">Définir un budget</div>
+          <div class="field">
+            <label>Catégorie de dépense</label>
+            <select id="budget-cat"></select>
+          </div>
+          <div class="field">
+            <label>Limite mensuelle (€)</label>
+            <input type="number" id="budget-limit" placeholder="ex: 500" min="0" step="1">
+          </div>
+          <button class="btn btn-primary" id="btn-save-budget">Enregistrer le budget</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Catégories -->
+    <section class="page" id="page-categories">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Catégories</div>
+          <div class="page-sub">Gérer vos catégories personnalisées</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start;">
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Nom</th><th>Type</th><th></th></tr></thead>
+              <tbody id="cat-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card section-gap">
+          <div style="font-weight:700;font-size:15px;">Nouvelle catégorie</div>
+          <div class="field">
+            <label>Nom</label>
+            <input type="text" id="cat-name" placeholder="ex: Vacances">
+          </div>
+          <div class="field">
+            <label>Type</label>
+            <select id="cat-type">
+              <option value="expense">Dépense</option>
+              <option value="income">Revenu</option>
+              <option value="both">Les deux</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="btn-add-cat">Ajouter</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Export -->
+    <section class="page" id="page-export">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Exporter les données</div>
+          <div class="page-sub">Télécharger vos transactions</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="card section-gap">
+          <div style="font-size:32px;">📊</div>
+          <div>
+            <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Export CSV</div>
+            <div style="color:var(--muted);font-size:13px;line-height:1.5;">
+              Exporte toutes tes transactions dans un fichier .csv compatible avec Excel, Google Sheets, etc.
+            </div>
+          </div>
+          <button class="btn btn-success" id="btn-export-csv">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Télécharger CSV
+          </button>
+        </div>
+
+        <div class="card section-gap">
+          <div style="font-size:32px;">📄</div>
+          <div>
+            <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Export PDF</div>
+            <div style="color:var(--muted);font-size:13px;line-height:1.5;">
+              Génère un rapport PDF de la page actuelle, idéal pour archiver ou imprimer ton bilan.
+            </div>
+          </div>
+          <button class="btn btn-primary" id="btn-export-pdf">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Télécharger PDF
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
