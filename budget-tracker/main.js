@@ -426,11 +426,12 @@ ipcMain.handle('import:pdf', async () => {
   const transactions = [];
   const lines = text.split('\n');
 
-  // Stratégie 1 : montant EN FIN DE LIGNE avec signe +/- explicite
-  // Format : "5.000,00-"  "427,00+"  "99,00-"  (point=milliers, virgule=décimale)
-  const amountEndRe  = /(\d{1,3}(?:\.\d{3})*,\d{2})([+-])\s*$/;
-  const dateStartRe  = /^(\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:\d{4}|\d{2}))/;
-  const anyDateRe    = /\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:\d{4}|\d{2})/g;
+  // Stratégie 1 : format Spuerkeess/BCEE — date valeur DD.MM.YY collée au montant
+  // Ex: "31.01.265.000,00-"  "04.02.26427,00-"  "04.02.2699,00-"
+  // La date valeur (DD.MM.YY = 8 chars) est capturée séparément du montant
+  const amountEndRe  = /(\d{2}\.\d{2}\.\d{2})(\d{1,3}(?:\.\d{3})*,\d{2})([+-])\s*$/;
+  const dateStartRe  = /^(\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2}))(?!\d)/;
+  const anyDateRe    = /\d{1,2}[.\/\-]\d{1,2}[.\/\-](?:20\d{2}|\d{2})(?!\d)/g;
 
   for (const line of lines) {
     const t = line.trim();
@@ -439,18 +440,19 @@ ipcMain.handle('import:pdf', async () => {
     const amountMatch = t.match(amountEndRe);
     if (!amountMatch) continue;
 
+    // Date comptable en début de ligne, sinon utiliser la date valeur du montant
     const dateMatch = t.match(dateStartRe);
-    if (!dateMatch) continue;
-
-    const date = toISODate(dateMatch[1]);
+    const dateStr = dateMatch ? dateMatch[1] : amountMatch[1];
+    const date = toISODate(dateStr);
     if (!date) continue;
 
+    // amountMatch[2] = montant, amountMatch[3] = signe +/-
     // Supprimer les séparateurs de milliers (points), convertir virgule→point
-    const amountStr = amountMatch[1].replace(/\./g, '').replace(',', '.');
+    const amountStr = amountMatch[2].replace(/\./g, '').replace(',', '.');
     const amount = parseFloat(amountStr);
     if (isNaN(amount) || amount === 0) continue;
 
-    const type = amountMatch[2] === '+' ? 'income' : 'expense';
+    const type = amountMatch[3] === '+' ? 'income' : 'expense';
 
     const desc = t
       .replace(amountMatch[0], '')
