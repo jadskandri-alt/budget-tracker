@@ -184,10 +184,12 @@ function clearTxForm() {
 document.getElementById('filter-type').addEventListener('change', loadTransactions);
 document.getElementById('filter-cat').addEventListener('change', loadTransactions);
 document.getElementById('filter-month').addEventListener('change', loadTransactions);
+document.getElementById('filter-search').addEventListener('input', loadTransactions);
 document.getElementById('btn-clear-filters').addEventListener('click', () => {
   document.getElementById('filter-type').value = '';
   document.getElementById('filter-cat').value = '';
   document.getElementById('filter-month').value = '';
+  document.getElementById('filter-search').value = '';
   loadTransactions();
 });
 
@@ -195,12 +197,13 @@ async function loadTransactions() {
   const type     = document.getElementById('filter-type').value;
   const category = document.getElementById('filter-cat').value;
   const month    = document.getElementById('filter-month').value;
+  const search   = document.getElementById('filter-search').value.trim();
 
   const categories = await window.api.getCategories();
   const txTypeSel = document.querySelector('input[name=tx-type]:checked')?.value || 'expense';
   populateCategorySelects(categories, txTypeSel);
 
-  const txs = await window.api.getTransactions({ type: type || undefined, category: category || undefined, month: month || undefined });
+  const txs = await window.api.getTransactions({ type: type || undefined, category: category || undefined, month: month || undefined, search: search || undefined });
 
   const allCats = await window.api.getCategories();
   const tbody = document.getElementById('tx-tbody');
@@ -219,6 +222,11 @@ async function loadTransactions() {
       </td>
       <td style="color:var(--muted)">${t.description || '—'}</td>
       <td class="amount-${t.type}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openEditModal(${t.id})" title="Modifier">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      </td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="deleteTx(${t.id})">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
@@ -242,6 +250,60 @@ window.updateTxCat = async function(id, category) {
   await window.api.updateTransaction({ id, category });
   toast('Catégorie mise à jour');
 };
+
+// ─── MODAL ÉDITION ───────────────────────────────────────────────────────────
+let _editId = null;
+
+window.openEditModal = async function(id) {
+  _editId = id;
+  const txs = await window.api.getTransactions({});
+  const t = txs.find(x => x.id === id);
+  if (!t) return;
+
+  const cats = await window.api.getCategories();
+  document.getElementById('edit-amount').value = t.amount;
+  document.getElementById('edit-date').value = t.date;
+  document.getElementById('edit-desc').value = t.description || '';
+  document.querySelector(`input[name=edit-type][value=${t.type}]`).checked = true;
+
+  const editCatSel = document.getElementById('edit-category');
+  editCatSel.innerHTML = cats.map(c =>
+    `<option value="${c.name}" ${c.name === t.category ? 'selected' : ''}>${c.name}</option>`
+  ).join('');
+
+  const overlay = document.getElementById('edit-modal-overlay');
+  overlay.style.display = 'flex';
+};
+
+document.getElementById('btn-edit-cancel').addEventListener('click', () => {
+  document.getElementById('edit-modal-overlay').style.display = 'none';
+  _editId = null;
+});
+
+document.getElementById('edit-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    e.currentTarget.style.display = 'none';
+    _editId = null;
+  }
+});
+
+document.getElementById('btn-edit-save').addEventListener('click', async () => {
+  if (!_editId) return;
+  const amount = parseFloat(document.getElementById('edit-amount').value);
+  const type = document.querySelector('input[name=edit-type]:checked').value;
+  const category = document.getElementById('edit-category').value;
+  const date = document.getElementById('edit-date').value;
+  const description = document.getElementById('edit-desc').value;
+
+  if (!amount || amount <= 0) return toast('Montant invalide', 'error');
+  if (!date) return toast('Date requise', 'error');
+
+  await window.api.updateTransaction({ id: _editId, amount, type, category, date, description });
+  toast('Transaction modifiée');
+  document.getElementById('edit-modal-overlay').style.display = 'none';
+  _editId = null;
+  loadTransactions();
+});
 
 // Sync category filter quand type change
 document.querySelectorAll('input[name=tx-type]').forEach(radio => {
@@ -412,7 +474,9 @@ document.getElementById('btn-import-cancel').addEventListener('click', () => {
 document.getElementById('btn-import-confirm').addEventListener('click', async () => {
   if (!pendingImport.length) return;
   const result = await window.api.importConfirm(pendingImport);
-  toast(`${result.count} transaction${result.count > 1 ? 's' : ''} importée${result.count > 1 ? 's' : ''} !`);
+  let msg = `${result.count} transaction${result.count > 1 ? 's' : ''} importée${result.count > 1 ? 's' : ''} !`;
+  if (result.skipped > 0) msg += ` (${result.skipped} doublon${result.skipped > 1 ? 's' : ''} ignoré${result.skipped > 1 ? 's' : ''})`;
+  toast(msg);
   pendingImport = [];
   document.getElementById('import-preview-card').style.display = 'none';
 });

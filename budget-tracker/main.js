@@ -378,6 +378,7 @@ ipcMain.handle('db:getTransactions', (_, filters = {}) => {
   if (filters.type) { sql += ' AND type = ?'; params.push(filters.type); }
   if (filters.category) { sql += ' AND category = ?'; params.push(filters.category); }
   if (filters.month) { sql += ' AND strftime(\'%Y-%m\', date) = ?'; params.push(filters.month); }
+  if (filters.search) { sql += ' AND (description LIKE ? OR category LIKE ?)'; params.push(`%${filters.search}%`, `%${filters.search}%`); }
 
   sql += ' ORDER BY date DESC, id DESC';
   return db.prepare(sql).all(...params);
@@ -397,8 +398,17 @@ ipcMain.handle('db:deleteTransaction', (_, id) => {
   return { success: true };
 });
 
-ipcMain.handle('db:updateTransaction', (_, { id, category }) => {
-  db.prepare('UPDATE transactions SET category=? WHERE id=?').run(category, id);
+ipcMain.handle('db:updateTransaction', (_, { id, category, amount, type, description, date }) => {
+  const fields = [];
+  const params = [];
+  if (category    !== undefined) { fields.push('category=?');    params.push(category); }
+  if (amount      !== undefined) { fields.push('amount=?');      params.push(amount); }
+  if (type        !== undefined) { fields.push('type=?');        params.push(type); }
+  if (description !== undefined) { fields.push('description=?'); params.push(description); }
+  if (date        !== undefined) { fields.push('date=?');        params.push(date); }
+  if (!fields.length) return { success: false };
+  params.push(id);
+  db.prepare(`UPDATE transactions SET ${fields.join(',')} WHERE id=?`).run(...params);
   return { success: true };
 });
 
@@ -627,8 +637,8 @@ ipcMain.handle('import:csv', async () => {
       else if (t === 'dépense' || t === 'depense' || t === 'expense') type = 'expense';
     }
 
-    const category    = col.category    >= 0 ? cols[col.category]    || 'Autres' : 'Autres';
     const description = col.description >= 0 ? cols[col.description] || ''       : '';
+    const category    = col.category    >= 0 ? (cols[col.category] || guessCategory(description)) : guessCategory(description);
 
     transactions.push({ date, amount, type, category, description });
   }
@@ -637,15 +647,43 @@ ipcMain.handle('import:csv', async () => {
 });
 
 ipcMain.handle('import:confirm', (_, transactions) => {
+  const exists = db.prepare(
+    `SELECT 1 FROM transactions WHERE date=? AND amount=? AND type=? AND description=? LIMIT 1`
+  );
   const insert = db.prepare(
     `INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)`
   );
+  let inserted = 0;
   const insertMany = db.transaction((txs) => {
-    for (const t of txs) insert.run(t.amount, t.type, t.category, t.description || '', t.date);
+    for (const t of txs) {
+      const dup = exists.get(t.date, t.amount, t.type, t.description || '');
+      if (dup) continue;
+      insert.run(t.amount, t.type, t.category, t.description || '', t.date);
+      inserted++;
+    }
   });
   insertMany(transactions);
-  return { success: true, count: transactions.length };
+  return { success: true, count: inserted, skipped: transactions.length - inserted };
 });
+
+// ─── Auto-catégorisation ──────────────────────────────────────────────────────
+
+function guessCategory(description) {
+  const d = (description || '').toLowerCase();
+  if (/loyer|rent|bail|appartement/.test(d)) return 'Loyer';
+  if (/netflix|spotify|amazon prime|apple|disney|deezer|youtube|hbo|canal\+|abonnement|subscription/.test(d)) return 'Abonnements';
+  if (/carburant|essence|total|esso|bp |shell|autoroute|parking|bus |train|tec |cfl |taxi|uber/.test(d)) return 'Transport';
+  if (/cactus|auchan|carrefour|lidl|aldi|delhaize|supermarche|supermarché|intermarche|match |provera|spar |colruyt|bofferding/.test(d)) return 'Alimentation';
+  if (/restaurant|mcdonald|burger|pizza|subway|sushi|snack|boulangerie|friterie|cafe |brasserie/.test(d)) return 'Alimentation';
+  if (/pharmacie|docteur|medecin|hopital|hospital|sante|santé|dentiste|opticien|laboratoire/.test(d)) return 'Santé';
+  if (/salaire|salary|traitement|paie /.test(d)) return 'Salaire';
+  if (/freelance|honoraire|prestation|facture /.test(d)) return 'Freelance';
+  if (/remboursement|avoir|vir recu|virement recu/.test(d)) return 'Autres revenus';
+  if (/vetement|vêtement|zara|h&m|primark|c&a|uniqlo|sport/.test(d)) return 'Vêtements';
+  if (/cinema|theatre|musee|concert|sport|gym|fitness|loisir/.test(d)) return 'Loisirs';
+  if (/pret|prêt|credit|crédit|hypotheque|hypothèque/.test(d)) return 'Loyer';
+  return 'Autres';
+}
 
 // ─── Import PDF ────────────────────────────────────────────────────────────────
 
@@ -734,7 +772,7 @@ ipcMain.handle('import:pdf', async () => {
         .trim()
         .slice(0, 80);
 
-      transactions.push({ date, amount, type, category: 'Autres', description: desc });
+      transactions.push({ date, amount, type, category: guessCategory(desc), description: desc });
     }
 
     // Stratégie 2 (fallback) : format générique
@@ -752,7 +790,7 @@ ipcMain.handle('import:pdf', async () => {
         const rawAmount = amounts[amounts.length - 1];
         const type = rawAmount < 0 ? 'expense' : (INCOME_KEYWORDS.test(line) ? 'income' : 'expense');
         const desc = lineForAmount.replace(/[+-]?\s*\d{1,3}(?:[\s\u00a0]\d{3})*[,\.]\d{2}[+-]?/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
-        transactions.push({ date, amount: Math.abs(rawAmount), type, category: 'Autres', description: desc });
+        transactions.push({ date, amount: Math.abs(rawAmount), type, category: guessCategory(desc), description: desc });
       }
     }
   }
