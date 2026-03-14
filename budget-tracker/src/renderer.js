@@ -202,12 +202,21 @@ async function loadTransactions() {
 
   const txs = await window.api.getTransactions({ type: type || undefined, category: category || undefined, month: month || undefined });
 
+  const allCats = await window.api.getCategories();
   const tbody = document.getElementById('tx-tbody');
-  tbody.innerHTML = txs.map(t => `
+  tbody.innerHTML = txs.map(t => {
+    const opts = allCats.map(c =>
+      `<option value="${c.name}" ${c.name === t.category ? 'selected' : ''}>${c.name}</option>`
+    ).join('');
+    return `
     <tr>
       <td>${fmtDate(t.date)}</td>
       <td><span class="badge badge-${t.type}">${t.type === 'income' ? 'Revenu' : 'Dépense'}</span></td>
-      <td>${t.category}</td>
+      <td>
+        <select onchange="updateTxCat(${t.id}, this.value)" style="border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:12px;background:var(--bg);">
+          ${opts}
+        </select>
+      </td>
       <td style="color:var(--muted)">${t.description || '—'}</td>
       <td class="amount-${t.type}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount)}</td>
       <td>
@@ -216,7 +225,8 @@ async function loadTransactions() {
         </button>
       </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   const empty = document.getElementById('tx-empty');
   empty.style.display = txs.length === 0 ? 'block' : 'none';
@@ -226,6 +236,11 @@ window.deleteTx = async function(id) {
   await window.api.deleteTransaction(id);
   toast('Transaction supprimée');
   loadTransactions();
+};
+
+window.updateTxCat = async function(id, category) {
+  await window.api.updateTransaction({ id, category });
+  toast('Catégorie mise à jour');
 };
 
 // Sync category filter quand type change

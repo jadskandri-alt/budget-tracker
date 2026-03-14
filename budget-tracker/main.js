@@ -397,6 +397,11 @@ ipcMain.handle('db:deleteTransaction', (_, id) => {
   return { success: true };
 });
 
+ipcMain.handle('db:updateTransaction', (_, { id, category }) => {
+  db.prepare('UPDATE transactions SET category=? WHERE id=?').run(category, id);
+  return { success: true };
+});
+
 // Catégories
 ipcMain.handle('db:getCategories', () => {
   return db.prepare('SELECT * FROM categories ORDER BY type, name').all();
