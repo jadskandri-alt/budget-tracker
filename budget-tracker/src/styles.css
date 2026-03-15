@@ -104,7 +104,8 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Sego
 
 .stat-card { position: relative; overflow: hidden; }
 .stat-card .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
-.stat-card .amount { font-size: 28px; font-weight: 700; margin: 6px 0 0; }
+.stat-card .amount { font-size: 28px; font-weight: 700; margin: 6px 0 2px; }
+.stat-card .stat-compare { font-size: 11px; min-height: 16px; margin-bottom: 2px; }
 .stat-card .amount.income  { color: var(--income); }
 .stat-card .amount.expense { color: var(--expense); }
 .stat-card .amount.balance { color: var(--primary); }

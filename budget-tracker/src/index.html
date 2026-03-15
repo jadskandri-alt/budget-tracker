@@ -105,6 +105,7 @@
         <div class="card stat-card income">
           <div class="label">Revenus</div>
           <div class="amount income" id="stat-income">0 €</div>
+          <div class="stat-compare" id="stat-income-compare"></div>
           <div class="stat-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
@@ -115,6 +116,7 @@
         <div class="card stat-card expense">
           <div class="label">Dépenses</div>
           <div class="amount expense" id="stat-expense">0 €</div>
+          <div class="stat-compare" id="stat-expense-compare"></div>
           <div class="stat-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/>
@@ -125,6 +127,7 @@
         <div class="card stat-card balance">
           <div class="label">Solde</div>
           <div class="amount balance" id="stat-balance">0 €</div>
+          <div class="stat-compare" id="stat-balance-compare"></div>
           <div class="stat-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="1" x2="12" y2="23"/>
@@ -134,6 +137,9 @@
         </div>
       </div>
 
+      <!-- Alertes budgets -->
+      <div id="dash-alerts" style="display:none;margin-bottom:16px;"></div>
+
       <div class="charts-row">
         <div class="card">
           <div class="chart-title">Revenus vs Dépenses — 6 derniers mois</div>
@@ -142,6 +148,30 @@
         <div class="card">
           <div class="chart-title">Dépenses par catégorie</div>
           <div class="chart-wrap"><canvas id="chart-doughnut"></canvas></div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px;">
+        <!-- Top 5 dépenses -->
+        <div class="card" style="grid-column:span 2;">
+          <div class="chart-title">Top 5 dépenses du mois</div>
+          <div id="dash-top5"><div style="color:var(--muted);font-size:13px;padding:8px 0;">Aucune dépense ce mois-ci</div></div>
+        </div>
+
+        <!-- Projection + Épargne -->
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div class="card" id="dash-projection-card">
+            <div class="chart-title">Projection fin de mois</div>
+            <div id="dash-projection"><div style="color:var(--muted);font-size:13px;">—</div></div>
+          </div>
+          <div class="card">
+            <div class="chart-title">Objectif épargne mensuel</div>
+            <div id="dash-savings"></div>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+              <input type="number" id="savings-goal-input" placeholder="Objectif €" min="0" step="10" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;">
+              <button class="btn btn-primary btn-sm" id="btn-save-savings-goal">OK</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -194,9 +224,15 @@
             <input type="date" id="tx-date">
           </div>
         </div>
-        <div class="field">
-          <label>Description (optionnel)</label>
-          <input type="text" id="tx-desc" placeholder="Notes…">
+        <div class="form-row" style="grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="field">
+            <label>Description (optionnel)</label>
+            <input type="text" id="tx-desc" placeholder="Notes…">
+          </div>
+          <div class="field">
+            <label>Tags (optionnel, séparés par virgule)</label>
+            <input type="text" id="tx-tags" placeholder="ex: vacances, cadeau">
+          </div>
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none;">
           <input type="checkbox" id="tx-recurring" style="width:15px;height:15px;cursor:pointer;">
@@ -229,7 +265,7 @@
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Description</th><th>Montant</th><th></th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Description</th><th>Tags</th><th>Montant</th><th></th><th></th></tr></thead>
             <tbody id="tx-tbody"></tbody>
           </table>
           <div id="tx-empty" class="empty-state" style="display:none;">
@@ -545,9 +581,15 @@
         <input type="date" id="edit-date">
       </div>
     </div>
-    <div class="field">
-      <label>Description</label>
-      <input type="text" id="edit-desc">
+    <div class="form-row" style="grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="edit-desc">
+      </div>
+      <div class="field">
+        <label>Tags</label>
+        <input type="text" id="edit-tags" placeholder="ex: vacances, cadeau">
+      </div>
     </div>
     <div style="display:flex;gap:8px;">
       <button class="btn btn-primary" id="btn-edit-save">Enregistrer</button>

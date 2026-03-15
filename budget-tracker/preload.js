@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Paramètres & Telegram
   settingsGet:        ()      => ipcRenderer.invoke('settings:get'),
+  setSavingsGoal:     (goal)  => ipcRenderer.invoke('settings:setSavingsGoal', goal),
   telegramConnect:    (token) => ipcRenderer.invoke('telegram:connect', token),
   telegramDisconnect: ()      => ipcRenderer.invoke('telegram:disconnect'),
   onTelegramNewTx:    (cb)    => ipcRenderer.on('telegram:new-tx', cb),

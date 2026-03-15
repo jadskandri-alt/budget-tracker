@@ -328,7 +328,8 @@ function initDatabase() {
       type        TEXT    NOT NULL CHECK(type IN ('income','expense')),
       category    TEXT    NOT NULL,
       description TEXT    DEFAULT '',
-      date        TEXT    NOT NULL
+      date        TEXT    NOT NULL,
+      tags        TEXT    DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS categories (
@@ -382,6 +383,9 @@ function initDatabase() {
     for (const c of cats) insertCat.run(c.name, c.type);
   });
   insertMany(defaultCategories);
+
+  // Migration: ajouter colonne tags si absente (bases existantes)
+  try { db.exec(`ALTER TABLE transactions ADD COLUMN tags TEXT DEFAULT ''`); } catch {}
 }
 
 // ─── Transactions récurrentes ─────────────────────────────────────────────────
@@ -467,12 +471,32 @@ ipcMain.handle('db:getTransactions', (_, filters = {}) => {
   return db.prepare(sql).all(...params);
 });
 
+function checkBudgetAlert(category, date) {
+  try {
+    const settings = loadSettings();
+    if (!settings.telegramToken || !settings.telegramChatId) return;
+    const budget = db.prepare('SELECT * FROM budgets WHERE category=?').get(category);
+    if (!budget) return;
+    const month = (date || '').slice(0, 7) || new Date().toISOString().slice(0, 7);
+    const spent = db.prepare(
+      `SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND category=? AND strftime('%Y-%m',date)=?`
+    ).get(category, month);
+    if (spent.total > budget.limit_amount) {
+      const overage = spent.total - budget.limit_amount;
+      telegramSend(settings.telegramToken, settings.telegramChatId,
+        `⚠️ *Budget ${category} dépassé !*\n\nDépensé : ${spent.total.toFixed(2)} €\nLimite : ${budget.limit_amount.toFixed(2)} €\nDépassement : +${overage.toFixed(2)} €`
+      );
+    }
+  } catch {}
+}
+
 ipcMain.handle('db:addTransaction', (_, data) => {
   const stmt = db.prepare(
-    `INSERT INTO transactions (amount, type, category, description, date)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO transactions (amount, type, category, description, date, tags)
+     VALUES (?, ?, ?, ?, ?, ?)`
   );
-  const result = stmt.run(data.amount, data.type, data.category, data.description || '', data.date);
+  const result = stmt.run(data.amount, data.type, data.category, data.description || '', data.date, data.tags || '');
+  if (data.type === 'expense') checkBudgetAlert(data.category, data.date);
   return { id: result.lastInsertRowid, ...data };
 });
 
@@ -481,7 +505,7 @@ ipcMain.handle('db:deleteTransaction', (_, id) => {
   return { success: true };
 });
 
-ipcMain.handle('db:updateTransaction', (_, { id, category, amount, type, description, date }) => {
+ipcMain.handle('db:updateTransaction', (_, { id, category, amount, type, description, date, tags }) => {
   const fields = [];
   const params = [];
   if (category    !== undefined) { fields.push('category=?');    params.push(category); }
@@ -489,6 +513,7 @@ ipcMain.handle('db:updateTransaction', (_, { id, category, amount, type, descrip
   if (type        !== undefined) { fields.push('type=?');        params.push(type); }
   if (description !== undefined) { fields.push('description=?'); params.push(description); }
   if (date        !== undefined) { fields.push('date=?');        params.push(date); }
+  if (tags        !== undefined) { fields.push('tags=?');        params.push(tags); }
   if (!fields.length) return { success: false };
   params.push(id);
   db.prepare(`UPDATE transactions SET ${fields.join(',')} WHERE id=?`).run(...params);
@@ -543,26 +568,50 @@ ipcMain.handle('db:deleteBudget', (_, category) => {
 
 // Statistiques
 ipcMain.handle('db:getSummary', (_, month) => {
-  const filter = month || (() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  })();
+  const now = new Date();
+  const currentM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const filter = month || currentM;
 
-  const income = db.prepare(
-    `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
-     WHERE type='income' AND strftime('%Y-%m', date)=?`
-  ).get(filter);
+  const income  = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='income'  AND strftime('%Y-%m',date)=?`).get(filter);
+  const expense = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=?`).get(filter);
 
-  const expense = db.prepare(
-    `SELECT COALESCE(SUM(amount), 0) as total FROM transactions
-     WHERE type='expense' AND strftime('%Y-%m', date)=?`
-  ).get(filter);
+  // Mois précédent (comparaison)
+  const [fy, fm] = filter.split('-').map(Number);
+  const pd = new Date(fy, fm - 2);
+  const prevMonth = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+  const prevIncome  = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='income'  AND strftime('%Y-%m',date)=?`).get(prevMonth);
+  const prevExpense = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=?`).get(prevMonth);
 
   const byCategory = db.prepare(
-    `SELECT category, SUM(amount) as total FROM transactions
-     WHERE type='expense' AND strftime('%Y-%m', date)=?
-     GROUP BY category ORDER BY total DESC`
+    `SELECT category, SUM(amount) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=? GROUP BY category ORDER BY total DESC`
   ).all(filter);
+
+  // Top 5 dépenses individuelles
+  const top5 = db.prepare(
+    `SELECT * FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=? ORDER BY amount DESC LIMIT 5`
+  ).all(filter);
+
+  // Projection fin de mois (seulement pour le mois courant)
+  let projection = null;
+  if (filter === currentM) {
+    const dayOfMonth = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const dailyRate = dayOfMonth > 0 ? expense.total / dayOfMonth : 0;
+    projection = {
+      currentSpend: expense.total,
+      projectedSpend: Math.round(dailyRate * daysInMonth * 100) / 100,
+      dayOfMonth,
+      daysInMonth,
+    };
+  }
+
+  // Alertes budgets (>= 80%)
+  const budgets = db.prepare('SELECT * FROM budgets').all();
+  const budgetAlerts = budgets.map(b => {
+    const s = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND category=? AND strftime('%Y-%m',date)=?`).get(b.category, filter);
+    const pct = b.limit_amount > 0 ? Math.round((s.total / b.limit_amount) * 100) : 0;
+    return { category: b.category, spent: s.total, limit: b.limit_amount, pct, exceeded: s.total > b.limit_amount };
+  }).filter(b => b.pct >= 80);
 
   const last6months = [];
   for (let i = 5; i >= 0; i--) {
@@ -570,21 +619,26 @@ ipcMain.handle('db:getSummary', (_, month) => {
     d.setMonth(d.getMonth() - i);
     const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const label = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
-    const inc = db.prepare(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type='income' AND strftime('%Y-%m', date)=?`
-    ).get(m);
-    const exp = db.prepare(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m', date)=?`
-    ).get(m);
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='income'  AND strftime('%Y-%m',date)=?`).get(m);
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=?`).get(m);
     last6months.push({ month: m, label, income: inc.total, expense: exp.total });
   }
+
+  const settings = loadSettings();
 
   return {
     income: income.total,
     expense: expense.total,
     balance: income.total - expense.total,
+    prevIncome: prevIncome.total,
+    prevExpense: prevExpense.total,
+    prevBalance: prevIncome.total - prevExpense.total,
     byCategory,
+    top5,
+    projection,
+    budgetAlerts,
     last6months,
+    savingsGoal: settings.savingsGoal || 0,
   };
 });
 
@@ -885,7 +939,12 @@ ipcMain.handle('import:pdf', async () => {
 
 ipcMain.handle('settings:get', () => {
   const s = loadSettings();
-  return { telegramToken: s.telegramToken || '', telegramChatId: s.telegramChatId || null, active: telegramPolling };
+  return { telegramToken: s.telegramToken || '', telegramChatId: s.telegramChatId || null, active: telegramPolling, savingsGoal: s.savingsGoal || 0 };
+});
+
+ipcMain.handle('settings:setSavingsGoal', (_, goal) => {
+  saveSettings({ savingsGoal: goal });
+  return { success: true };
 });
 
 ipcMain.handle('telegram:connect', async (_, token) => {

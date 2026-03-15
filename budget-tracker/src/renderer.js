@@ -52,6 +52,13 @@ document.querySelectorAll('.nav-item').forEach(item => {
 });
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────────
+document.getElementById('btn-save-savings-goal').addEventListener('click', async () => {
+  const goal = parseFloat(document.getElementById('savings-goal-input').value) || 0;
+  await window.api.setSavingsGoal(goal);
+  toast('Objectif épargne enregistré !');
+  loadDashboard();
+});
+
 document.getElementById('dash-prev').addEventListener('click', () => {
   const [y, m] = dashMonth.split('-').map(Number);
   const d = new Date(y, m - 2);
@@ -66,6 +73,18 @@ document.getElementById('dash-next').addEventListener('click', () => {
   loadDashboard();
 });
 
+function compareStat(current, previous, lowerIsBetter = false) {
+  if (!previous || previous === 0) return '';
+  const diff = current - previous;
+  const pct = Math.round(Math.abs(diff / previous) * 100);
+  if (diff === 0) return `<span style="color:var(--muted);font-size:11px;">= mois précédent</span>`;
+  const up = diff > 0;
+  const good = lowerIsBetter ? !up : up;
+  const arrow = up ? '▲' : '▼';
+  const color = good ? 'var(--income)' : 'var(--expense)';
+  return `<span style="color:${color};font-size:11px;">${arrow} ${pct}% vs mois préc.</span>`;
+}
+
 async function loadDashboard() {
   const summary = await window.api.getSummary(dashMonth);
 
@@ -74,9 +93,76 @@ async function loadDashboard() {
 
   document.getElementById('stat-income').textContent  = fmt(summary.income);
   document.getElementById('stat-expense').textContent = fmt(summary.expense);
+  document.getElementById('stat-income-compare').innerHTML  = compareStat(summary.income, summary.prevIncome, false);
+  document.getElementById('stat-expense-compare').innerHTML = compareStat(summary.expense, summary.prevExpense, true);
+  document.getElementById('stat-balance-compare').innerHTML = compareStat(summary.balance, summary.prevBalance, false);
+
   const bal = document.getElementById('stat-balance');
   bal.textContent = fmt(summary.balance);
   bal.style.color = summary.balance >= 0 ? 'var(--income)' : 'var(--expense)';
+
+  // Alertes budgets
+  const alertsEl = document.getElementById('dash-alerts');
+  if (summary.budgetAlerts && summary.budgetAlerts.length > 0) {
+    alertsEl.style.display = 'block';
+    alertsEl.innerHTML = summary.budgetAlerts.map(b => {
+      const icon = b.exceeded ? '🔴' : '🟠';
+      const msg  = b.exceeded
+        ? `Budget <strong>${b.category}</strong> dépassé — ${fmt(b.spent)} / ${fmt(b.limit)} (${b.pct}%)`
+        : `Budget <strong>${b.category}</strong> à ${b.pct}% — ${fmt(b.spent)} / ${fmt(b.limit)}`;
+      return `<div style="background:${b.exceeded ? '#fef2f2' : '#fffbeb'};border:1px solid ${b.exceeded ? '#fca5a5' : '#fcd34d'};border-radius:10px;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:8px;">${icon} ${msg}</div>`;
+    }).join('');
+  } else {
+    alertsEl.style.display = 'none';
+  }
+
+  // Top 5 dépenses
+  const top5El = document.getElementById('dash-top5');
+  if (summary.top5 && summary.top5.length > 0) {
+    top5El.innerHTML = summary.top5.map((t, i) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);">
+        <span style="width:22px;height:22px;background:var(--primary);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${i+1}</span>
+        <span style="flex:1;font-size:13px;">${t.description || t.category}</span>
+        <span style="font-size:12px;color:var(--muted);">${t.category}</span>
+        <span style="font-weight:700;color:var(--expense);">${fmt(t.amount)}</span>
+      </div>
+    `).join('');
+  } else {
+    top5El.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Aucune dépense ce mois-ci</div>';
+  }
+
+  // Projection fin de mois
+  const projEl = document.getElementById('dash-projection');
+  if (summary.projection) {
+    const p = summary.projection;
+    const diff = p.projectedSpend - p.currentSpend;
+    projEl.innerHTML = `
+      <div style="font-size:22px;font-weight:700;color:var(--expense);">${fmt(p.projectedSpend)}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px;">estimé au ${p.daysInMonth} (j${p.dayOfMonth}/${p.daysInMonth})</div>
+      <div style="font-size:12px;margin-top:6px;color:var(--muted);">Actuellement : ${fmt(p.currentSpend)} → +${fmt(diff)} restant</div>
+    `;
+  } else {
+    projEl.innerHTML = '<div style="color:var(--muted);font-size:13px;">Mois passé</div>';
+  }
+
+  // Objectif épargne
+  const savingsEl = document.getElementById('dash-savings');
+  const goal = summary.savingsGoal || 0;
+  const saved = Math.max(0, summary.income - summary.expense);
+  if (goal > 0) {
+    const pct = Math.min(Math.round((saved / goal) * 100), 100);
+    const cls = pct >= 100 ? 'ok' : pct >= 60 ? 'warning' : 'danger';
+    savingsEl.innerHTML = `
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+        <span>${fmt(saved)} économisés</span><span style="color:var(--muted);">/ ${fmt(goal)}</span>
+      </div>
+      <div class="progress"><div class="progress-bar ${cls}" style="width:${pct}%"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">${pct}% de l'objectif atteint</div>
+    `;
+  } else {
+    savingsEl.innerHTML = '<div style="color:var(--muted);font-size:12px;">Définir un objectif ci-dessous</div>';
+  }
+  document.getElementById('savings-goal-input').value = goal > 0 ? goal : '';
 
   // Bar chart
   const barCtx = document.getElementById('chart-bar').getContext('2d');
@@ -153,12 +239,13 @@ document.getElementById('btn-save-tx').addEventListener('click', async () => {
   const category = document.getElementById('tx-category').value;
   const date = document.getElementById('tx-date').value;
   const description = document.getElementById('tx-desc').value;
+  const tags = document.getElementById('tx-tags').value;
 
   if (!amount || amount <= 0) return toast('Montant invalide', 'error');
   if (!category) return toast('Sélectionne une catégorie', 'error');
   if (!date) return toast('Date requise', 'error');
 
-  await window.api.addTransaction({ amount, type, category, description, date });
+  await window.api.addTransaction({ amount, type, category, description, date, tags });
 
   if (document.getElementById('tx-recurring').checked) {
     const day_of_month = new Date(date).getUTCDate();
@@ -177,6 +264,7 @@ function clearTxForm() {
   document.getElementById('tx-amount').value = '';
   document.getElementById('tx-desc').value = '';
   document.getElementById('tx-date').value = '';
+  document.getElementById('tx-tags').value = '';
   document.getElementById('tx-income').checked = true;
   document.getElementById('tx-recurring').checked = false;
 }
@@ -221,6 +309,7 @@ async function loadTransactions() {
         </select>
       </td>
       <td style="color:var(--muted)">${t.description || '—'}</td>
+      <td>${t.tags ? t.tags.split(',').filter(Boolean).map(tag => `<span style="background:#ede9fe;color:#6d28d9;padding:2px 7px;border-radius:20px;font-size:11px;white-space:nowrap;">${tag.trim()}</span>`).join(' ') : '—'}</td>
       <td class="amount-${t.type}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount)}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="openEditModal(${t.id})" title="Modifier">
@@ -264,6 +353,7 @@ window.openEditModal = async function(id) {
   document.getElementById('edit-amount').value = t.amount;
   document.getElementById('edit-date').value = t.date;
   document.getElementById('edit-desc').value = t.description || '';
+  document.getElementById('edit-tags').value = t.tags || '';
   document.querySelector(`input[name=edit-type][value=${t.type}]`).checked = true;
 
   const editCatSel = document.getElementById('edit-category');
@@ -294,11 +384,12 @@ document.getElementById('btn-edit-save').addEventListener('click', async () => {
   const category = document.getElementById('edit-category').value;
   const date = document.getElementById('edit-date').value;
   const description = document.getElementById('edit-desc').value;
+  const tags = document.getElementById('edit-tags').value;
 
   if (!amount || amount <= 0) return toast('Montant invalide', 'error');
   if (!date) return toast('Date requise', 'error');
 
-  await window.api.updateTransaction({ id: _editId, amount, type, category, date, description });
+  await window.api.updateTransaction({ id: _editId, amount, type, category, date, description, tags });
   toast('Transaction modifiée');
   document.getElementById('edit-modal-overlay').style.display = 'none';
   _editId = null;
