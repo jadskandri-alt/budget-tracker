@@ -32,11 +32,14 @@ let telegramOffset = 0;
 function telegramGet(token, method, params = {}) {
   return new Promise((resolve, reject) => {
     const q = new URLSearchParams(params).toString();
-    https.get(`https://api.telegram.org/bot${token}/${method}${q ? '?' + q : ''}`, res => {
+    const req = https.get(`https://api.telegram.org/bot${token}/${method}${q ? '?' + q : ''}`, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('JSON')); } });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    // Timeout de 35s (> long-poll 25s) pour éviter un gel si la connexion se coupe
+    req.setTimeout(35000, () => { req.destroy(); reject(new Error('timeout')); });
   });
 }
 
@@ -139,7 +142,9 @@ async function startTelegramPolling() {
   const poll = async () => {
     if (!telegramPolling) return;
     try {
-      const res = await telegramGet(settings.telegramToken, 'getUpdates', {
+      const currentToken = loadSettings().telegramToken;
+      if (!currentToken) { if (telegramPolling) setTimeout(poll, 5000); return; }
+      const res = await telegramGet(currentToken, 'getUpdates', {
         offset: telegramOffset, timeout: 25,
         allowed_updates: JSON.stringify(['message', 'callback_query'])
       });
@@ -299,8 +304,11 @@ async function startTelegramPolling() {
         }
         saveSettings({ telegramOffset });
       }
-    } catch (_) {}
-    if (telegramPolling) setTimeout(poll, 1000);
+    } catch (err) {
+      // Erreur réseau ou timeout → on loggue et on réessaie dans 3s
+      console.error('[Telegram poll error]', err.message);
+    }
+    if (telegramPolling) setTimeout(poll, 3000);
   };
   poll();
 }
