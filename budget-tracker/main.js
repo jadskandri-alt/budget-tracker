@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
 const Database = require('better-sqlite3');
 const pdfParse = require('pdf-parse');
@@ -445,6 +446,11 @@ app.whenReady().then(() => {
   applyRecurringTransactions();
   createWindow();
   startTelegramPolling();
+  setTimeout(() => {
+    sendMonthlyReport();
+    sendRecurringReminders();
+    autoBackup();
+  }, 3000); // délai pour laisser le bot démarrer
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -466,6 +472,7 @@ ipcMain.handle('db:getTransactions', (_, filters = {}) => {
   if (filters.category) { sql += ' AND category = ?'; params.push(filters.category); }
   if (filters.month) { sql += ' AND strftime(\'%Y-%m\', date) = ?'; params.push(filters.month); }
   if (filters.search) { sql += ' AND (description LIKE ? OR category LIKE ?)'; params.push(`%${filters.search}%`, `%${filters.search}%`); }
+  if (filters.tag) { sql += ' AND tags LIKE ?'; params.push(`%${filters.tag}%`); }
 
   sql += ' ORDER BY date DESC, id DESC';
   return db.prepare(sql).all(...params);
@@ -626,10 +633,13 @@ ipcMain.handle('db:getSummary', (_, month) => {
 
   const settings = loadSettings();
 
+  const savingsRate = income.total > 0 ? Math.round(((income.total - expense.total) / income.total) * 100) : 0;
+
   return {
     income: income.total,
     expense: expense.total,
     balance: income.total - expense.total,
+    savingsRate,
     prevIncome: prevIncome.total,
     prevExpense: prevExpense.total,
     prevBalance: prevIncome.total - prevExpense.total,
@@ -933,6 +943,107 @@ ipcMain.handle('import:pdf', async () => {
   }
 
   return { success: true, transactions, total: transactions.length };
+});
+
+// ─── Rapport mensuel automatique ──────────────────────────────────────────────
+
+function sendMonthlyReport() {
+  try {
+    const settings = loadSettings();
+    if (!settings.telegramToken || !settings.telegramChatId) return;
+    const now = new Date();
+    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1);
+    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+    if (settings.lastMonthlyReport === prevMonth) return;
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='income' AND strftime('%Y-%m',date)=?`).get(prevMonth);
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=?`).get(prevMonth);
+    if (inc.total === 0 && exp.total === 0) return; // pas de données
+    const byCat = db.prepare(`SELECT category, SUM(amount) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)=? GROUP BY category ORDER BY total DESC LIMIT 5`).all(prevMonth);
+    const bal = inc.total - exp.total;
+    const rate = inc.total > 0 ? Math.round(((inc.total - exp.total) / inc.total) * 100) : 0;
+    const monthLabel = prevDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    const catLines = byCat.map(c => `  • ${c.category} : ${c.total.toFixed(2)} €`).join('\n');
+    telegramSend(settings.telegramToken, settings.telegramChatId,
+      `📊 *Bilan ${monthLabel}*\n\n` +
+      `✅ Revenus : ${inc.total.toFixed(2)} €\n` +
+      `💸 Dépenses : ${exp.total.toFixed(2)} €\n` +
+      `💰 Solde : ${bal >= 0 ? '+' : ''}${bal.toFixed(2)} €\n` +
+      `📈 Taux d'épargne : ${rate}%\n\n` +
+      `🏷 Top dépenses :\n${catLines || '  Aucune'}`
+    );
+    saveSettings({ lastMonthlyReport: prevMonth });
+  } catch {}
+}
+
+// ─── Rappels récurrents ────────────────────────────────────────────────────────
+
+function sendRecurringReminders() {
+  try {
+    const settings = loadSettings();
+    if (!settings.telegramToken || !settings.telegramChatId) return;
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    if (settings.lastReminderCheck === todayStr) return;
+    const today = now.getDate();
+    const recurrings = db.prepare(`SELECT * FROM recurring_transactions WHERE active=1 AND type='expense'`).all();
+    for (const r of recurrings) {
+      const daysUntil = r.day_of_month - today;
+      if (daysUntil > 0 && daysUntil <= 3) {
+        const dayWord = daysUntil === 1 ? 'demain' : `dans ${daysUntil} jours`;
+        telegramSend(settings.telegramToken, settings.telegramChatId,
+          `⏰ *Rappel :* ${r.description || r.category} — *${r.amount.toFixed(2)} €* prévu ${dayWord} (le ${r.day_of_month})`
+        );
+      }
+    }
+    saveSettings({ lastReminderCheck: todayStr });
+  } catch {}
+}
+
+// ─── Backup automatique ────────────────────────────────────────────────────────
+
+function autoBackup() {
+  try {
+    const settings = loadSettings();
+    const today = new Date().toISOString().slice(0, 10);
+    const daysSince = settings.lastBackup
+      ? Math.floor((Date.now() - new Date(settings.lastBackup).getTime()) / 86400000)
+      : 999;
+    if (daysSince < 7) return;
+    const backupDir = path.join(os.homedir(), 'Desktop', 'Budget Backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const dest = path.join(backupDir, `budget-${today}.sqlite`);
+    fs.copyFileSync(dbPath, dest);
+    saveSettings({ lastBackup: today });
+    console.log(`[Backup] ${dest}`);
+  } catch (e) { console.error('[Backup]', e.message); }
+}
+
+ipcMain.handle('backup:now', () => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const backupDir = path.join(os.homedir(), 'Desktop', 'Budget Backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const dest = path.join(backupDir, `budget-${today}-${Date.now()}.sqlite`);
+    fs.copyFileSync(dbPath, dest);
+    saveSettings({ lastBackup: today });
+    return { success: true, dest };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+// ─── Moyenne 3 mois par catégorie ─────────────────────────────────────────────
+
+ipcMain.handle('db:getAvg3Months', () => {
+  const months = [];
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(); d.setMonth(d.getMonth() - i);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const cats = db.prepare(`SELECT DISTINCT category FROM transactions WHERE type='expense'`).all().map(r => r.category);
+  return cats.map(cat => {
+    const totals = months.map(m => db.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE type='expense' AND category=? AND strftime('%Y-%m',date)=?`).get(cat, m).total).filter(t => t > 0);
+    if (!totals.length) return null;
+    return { category: cat, avg: Math.round(totals.reduce((a, b) => a + b, 0) / totals.length * 100) / 100 };
+  }).filter(Boolean).sort((a, b) => b.avg - a.avg).slice(0, 8);
 });
 
 // ─── Paramètres & Telegram IPC ────────────────────────────────────────────────

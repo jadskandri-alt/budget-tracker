@@ -52,6 +52,20 @@ document.querySelectorAll('.nav-item').forEach(item => {
 });
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────────
+// ─── DARK MODE ───────────────────────────────────────────────────────────────
+(function initDarkMode() {
+  if (localStorage.getItem('darkMode') === '1') {
+    document.documentElement.classList.add('dark');
+    document.getElementById('btn-dark-mode').textContent = '☀️ Mode clair';
+  }
+})();
+
+document.getElementById('btn-dark-mode').addEventListener('click', () => {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('darkMode', isDark ? '1' : '0');
+  document.getElementById('btn-dark-mode').textContent = isDark ? '☀️ Mode clair' : '🌙 Mode sombre';
+});
+
 document.getElementById('btn-save-savings-goal').addEventListener('click', async () => {
   const goal = parseFloat(document.getElementById('savings-goal-input').value) || 0;
   await window.api.setSavingsGoal(goal);
@@ -164,6 +178,34 @@ async function loadDashboard() {
   }
   document.getElementById('savings-goal-input').value = goal > 0 ? goal : '';
 
+  // Taux d'épargne
+  const rateEl = document.getElementById('dash-savings-rate');
+  if (summary.income > 0) {
+    const rate = summary.savingsRate;
+    const rateColor = rate >= 20 ? 'var(--income)' : rate >= 10 ? 'var(--warning)' : 'var(--expense)';
+    const rateIcon = rate >= 20 ? '🟢' : rate >= 10 ? '🟠' : '🔴';
+    rateEl.style.display = 'block';
+    rateEl.innerHTML = `<div style="background:var(--surface);border-radius:10px;padding:10px 16px;font-size:13px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow);">${rateIcon} Taux d'épargne ce mois : <strong style="color:${rateColor};font-size:16px;">${rate}%</strong><span style="color:var(--muted);font-size:12px;">(${fmt(Math.max(0, summary.income - summary.expense))} économisés sur ${fmt(summary.income)} de revenus)</span></div>`;
+  } else {
+    rateEl.style.display = 'none';
+  }
+
+  // Moyenne 3 mois
+  const avg3 = await window.api.getAvg3Months();
+  const avg3El = document.getElementById('dash-avg3');
+  if (avg3 && avg3.length > 0) {
+    avg3El.style.gridTemplateColumns = `repeat(${Math.min(avg3.length, 4)}, 1fr)`;
+    avg3El.innerHTML = avg3.map(c => `
+      <div style="background:var(--bg);border-radius:8px;padding:10px 14px;">
+        <div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;">${c.category}</div>
+        <div style="font-size:18px;font-weight:700;color:var(--expense);margin-top:4px;">${fmt(c.avg)}</div>
+        <div style="font-size:10px;color:var(--muted);">/ mois en moy.</div>
+      </div>
+    `).join('');
+  } else {
+    avg3El.innerHTML = '<div style="color:var(--muted);font-size:13px;grid-column:span 4;">Pas assez de données (3 mois requis)</div>';
+  }
+
   // Bar chart
   const barCtx = document.getElementById('chart-bar').getContext('2d');
   if (barChart) barChart.destroy();
@@ -273,11 +315,13 @@ document.getElementById('filter-type').addEventListener('change', loadTransactio
 document.getElementById('filter-cat').addEventListener('change', loadTransactions);
 document.getElementById('filter-month').addEventListener('change', loadTransactions);
 document.getElementById('filter-search').addEventListener('input', loadTransactions);
+document.getElementById('filter-tag').addEventListener('input', loadTransactions);
 document.getElementById('btn-clear-filters').addEventListener('click', () => {
   document.getElementById('filter-type').value = '';
   document.getElementById('filter-cat').value = '';
   document.getElementById('filter-month').value = '';
   document.getElementById('filter-search').value = '';
+  document.getElementById('filter-tag').value = '';
   loadTransactions();
 });
 
@@ -286,12 +330,13 @@ async function loadTransactions() {
   const category = document.getElementById('filter-cat').value;
   const month    = document.getElementById('filter-month').value;
   const search   = document.getElementById('filter-search').value.trim();
+  const tag      = document.getElementById('filter-tag').value.trim();
 
   const categories = await window.api.getCategories();
   const txTypeSel = document.querySelector('input[name=tx-type]:checked')?.value || 'expense';
   populateCategorySelects(categories, txTypeSel);
 
-  const txs = await window.api.getTransactions({ type: type || undefined, category: category || undefined, month: month || undefined, search: search || undefined });
+  const txs = await window.api.getTransactions({ type: type || undefined, category: category || undefined, month: month || undefined, search: search || undefined, tag: tag || undefined });
 
   const allCats = await window.api.getCategories();
   const tbody = document.getElementById('tx-tbody');
@@ -317,6 +362,11 @@ async function loadTransactions() {
         </button>
       </td>
       <td>
+        <button class="btn btn-outline btn-sm" onclick="duplicateTx(${t.id})" title="Dupliquer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        </button>
+      </td>
+      <td>
         <button class="btn btn-outline btn-sm" onclick="deleteTx(${t.id})">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
         </button>
@@ -332,6 +382,18 @@ async function loadTransactions() {
 window.deleteTx = async function(id) {
   await window.api.deleteTransaction(id);
   toast('Transaction supprimée');
+  loadTransactions();
+};
+
+window.duplicateTx = async function(id) {
+  const txs = await window.api.getTransactions({});
+  const t = txs.find(x => x.id === id);
+  if (!t) return;
+  await window.api.addTransaction({
+    amount: t.amount, type: t.type, category: t.category,
+    description: t.description, date: new Date().toISOString().slice(0, 10), tags: t.tags || ''
+  });
+  toast('Transaction dupliquée (aujourd\'hui)');
   loadTransactions();
 };
 
@@ -583,6 +645,12 @@ document.getElementById('btn-export-pdf').addEventListener('click', async () => 
   const result = await window.api.exportPDF();
   if (result.success) toast('PDF exporté avec succès !');
   else toast('Export annulé', 'error');
+});
+
+document.getElementById('btn-backup-now').addEventListener('click', async () => {
+  const result = await window.api.backupNow();
+  if (result.success) toast('Sauvegarde créée sur le Bureau !');
+  else toast('Erreur de sauvegarde', 'error');
 });
 
 // ─── RÉCURRENTS ───────────────────────────────────────────────────────────────────

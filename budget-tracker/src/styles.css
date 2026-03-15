@@ -238,6 +238,25 @@ tr:hover td { background: #f8fafc; }
 .month-nav button:hover { background: #f1f5f9; }
 .month-nav span { font-weight: 600; min-width: 120px; text-align: center; font-size: 14px; }
 
+/* ─── Dark mode ─────────────────────────────────────────────────────────────── */
+.dark {
+  --bg:      #0f172a;
+  --surface: #1e293b;
+  --border:  #334155;
+  --text:    #f1f5f9;
+  --muted:   #94a3b8;
+  --shadow:  0 1px 3px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+}
+.dark .nav-item:hover  { background: #334155; }
+.dark .nav-item.active { background: #312e81; }
+.dark tr:hover td      { background: #263044; }
+.dark td               { border-bottom-color: #1e293b; }
+.dark .btn-outline:hover { background: #334155; }
+.dark .progress        { background: #334155; }
+.dark .filters select, .dark .filters input { background: var(--surface); }
+.dark #btn-dark-mode   { color: var(--muted); border-color: var(--border); }
+.dark .type-toggle label { border-color: var(--border); color: var(--muted); }
+
 /* ─── Print styles ──────────────────────────────────────────────────────────── */
 @media print {
   .sidebar, .btn, .filters, .page:not(.active) { display: none !important; }

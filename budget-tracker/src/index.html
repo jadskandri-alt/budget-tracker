@@ -81,7 +81,9 @@
       </div>
     </nav>
 
-    <div class="sidebar-footer">Budget Tracker v1.0</div>
+    <div class="sidebar-footer">
+      <button id="btn-dark-mode" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 12px;cursor:pointer;font-size:12px;color:var(--muted);width:100%;">🌙 Mode sombre</button>
+    </div>
   </aside>
 
   <!-- ─── Main ─────────────────────────────────────────────────────────────── -->
@@ -137,6 +139,9 @@
         </div>
       </div>
 
+      <!-- Taux d'épargne -->
+      <div id="dash-savings-rate" style="margin-bottom:16px;display:none;"></div>
+
       <!-- Alertes budgets -->
       <div id="dash-alerts" style="display:none;margin-bottom:16px;"></div>
 
@@ -172,6 +177,13 @@
               <button class="btn btn-primary btn-sm" id="btn-save-savings-goal">OK</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="chart-title">Moyenne mensuelle par catégorie (3 derniers mois)</div>
+        <div id="dash-avg3" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px;">
+          <div style="color:var(--muted);font-size:13px;grid-column:span 4;">Chargement…</div>
         </div>
       </div>
 
@@ -248,6 +260,7 @@
       <div class="card" style="margin-bottom:16px;padding:14px 20px;">
         <div class="filters">
           <input type="text" id="filter-search" placeholder="Rechercher…" style="min-width:140px;">
+          <input type="text" id="filter-tag" placeholder="Tag…" style="min-width:100px;">
           <select id="filter-type">
             <option value="">Tous les types</option>
             <option value="income">Revenus</option>
@@ -265,7 +278,7 @@
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Description</th><th>Tags</th><th>Montant</th><th></th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th>Catégorie</th><th>Description</th><th>Tags</th><th>Montant</th><th></th><th></th><th></th></tr></thead>
             <tbody id="tx-tbody"></tbody>
           </table>
           <div id="tx-empty" class="empty-state" style="display:none;">
@@ -418,7 +431,7 @@
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
         <div class="card section-gap">
           <div style="font-size:32px;">📊</div>
           <div>
@@ -444,6 +457,20 @@
           <button class="btn btn-primary" id="btn-export-pdf">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Télécharger PDF
+          </button>
+        </div>
+
+        <div class="card section-gap">
+          <div style="font-size:32px;">💾</div>
+          <div>
+            <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Sauvegarde DB</div>
+            <div style="color:var(--muted);font-size:13px;line-height:1.5;">
+              Copie ta base de données SQLite dans <strong>~/Desktop/Budget Backups/</strong>. Automatique chaque semaine.
+            </div>
+          </div>
+          <button class="btn btn-outline" id="btn-backup-now">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v14a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Sauvegarder maintenant
           </button>
         </div>
       </div>

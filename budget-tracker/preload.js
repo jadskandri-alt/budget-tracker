@@ -19,10 +19,12 @@ contextBridge.exposeInMainWorld('api', {
 
   // Stats
   getSummary: (month) => ipcRenderer.invoke('db:getSummary', month),
+  getAvg3Months: () => ipcRenderer.invoke('db:getAvg3Months'),
 
-  // Export
+  // Export & Backup
   exportCSV: () => ipcRenderer.invoke('export:csv'),
   exportPDF: () => ipcRenderer.invoke('export:pdf'),
+  backupNow: () => ipcRenderer.invoke('backup:now'),
 
   // Import
   importCSV:     ()     => ipcRenderer.invoke('import:csv'),
